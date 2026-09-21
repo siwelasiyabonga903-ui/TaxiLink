@@ -1,8 +1,8 @@
 from decimal import Decimal
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
-from django.db.models import Sum
-
+from django.db.models import Sum, Max
+from .notification_service import create_notification
 from rest_framework import serializers
 
 from .models import (
@@ -12,6 +12,8 @@ from .models import (
     Route,
     WaitingRequest,
     WaitingSpot,
+    Notification,
+    DeviceToken,
 )
 from .services import calculate_distance_meters
 User = get_user_model()
@@ -38,12 +40,14 @@ class WaitingSpotSerializer(serializers.ModelSerializer):
             "is_active",
             "active_waiting_count",
             "created_at",
+            "stop_order",
         )
         read_only_fields = (
             "id",
             "route_name",
             "active_waiting_count",
             "created_at",
+            "stop_order",
         )
 
     def get_active_waiting_count(self, obj):
@@ -56,17 +60,29 @@ class WaitingSpotSerializer(serializers.ModelSerializer):
         if annotated_count is not None:
             return annotated_count
 
-        waiting_total = (
+        assigned_request_ids = (
+            DispatchRequest.objects.filter(
+                dispatch__status__in=[
+                    DispatchAssignment.Status.PENDING,
+                    DispatchAssignment.Status.ACCEPTED,
+                    DispatchAssignment.Status.EN_ROUTE,
+                ]
+            ).values("waiting_request_id")
+        )
+
+        return (
             obj.waiting_requests
             .filter(
-            status=WaitingRequest.Status.WAITING
+                status=WaitingRequest.Status.WAITING
+            )
+            .exclude(
+                pk__in=assigned_request_ids
             )
             .aggregate(
                 total=Sum("party_size")
             )["total"]
+            or 0
         )
-
-        return waiting_total or 0
 
     def to_representation(self, instance):
         representation = super().to_representation(
@@ -85,6 +101,31 @@ class WaitingSpotSerializer(serializers.ModelSerializer):
             )
 
         return representation
+
+    def create(self, validated_data):
+        route = validated_data["route"]
+
+        with transaction.atomic():
+            Route.objects.select_for_update().get(
+                pk=route.pk
+            )
+
+            max_order = (
+                WaitingSpot.objects
+                .filter(route=route)
+                .aggregate(
+                    max_order=Max("stop_order")
+                )["max_order"]
+                or 0
+            )
+
+            validated_data["stop_order"] = (
+                max_order + 1
+            )
+
+            return super().create(
+                validated_data
+            )
 
 
 class RouteSerializer(serializers.ModelSerializer):
@@ -581,6 +622,13 @@ class DispatchAssignmentSerializer(serializers.ModelSerializer):
 
         try:
             with transaction.atomic():
+                # Allocate passengers to one taxi at a time on this route.
+                route = (
+                    Route.objects
+                    .select_for_update()
+                    .get(pk=route.pk)
+                )
+
                 availability, _ = (
                     DriverAvailability.objects
                     .select_for_update()
@@ -642,7 +690,8 @@ class DispatchAssignmentSerializer(serializers.ModelSerializer):
                         id__in=already_assigned_ids
                     )
                     .select_related(
-                        "waiting_spot"
+                        "waiting_spot",
+                        "passenger",
                     )
                     .order_by(
                         "checked_in_at",
@@ -696,6 +745,28 @@ class DispatchAssignmentSerializer(serializers.ModelSerializer):
                     in selected_requests
                 )
 
+                selected_request_ids = [
+                    waiting_request.id
+                    for waiting_request in selected_requests
+                ]
+
+                reassigned_request_ids = set(
+                    DispatchRequest.objects
+                    .filter(
+                        waiting_request_id__in=(
+                            selected_request_ids
+                        ),
+                        dispatch__status__in=[
+                            DispatchAssignment.Status.REJECTED,
+                            DispatchAssignment.Status.CANCELLED,
+                        ],
+                    )
+                    .values_list(
+                        "waiting_request_id",
+                        flat=True,
+                    )
+                )
+
                 assignment = (
                     DispatchAssignment.objects.create(
                         dispatcher=request.user,
@@ -734,6 +805,56 @@ class DispatchAssignmentSerializer(serializers.ModelSerializer):
                     ]
                 )
 
+                if reassigned_request_ids:
+                    create_notification(
+                        recipient=driver,
+                        notification_type=(
+                            Notification.Type.DISPATCH_REASSIGNED
+                        ),
+                        title="Reassigned dispatch",
+                        message=(
+                            f"You have been assigned passengers "
+                            f"waiting on {route.name}."
+                        ),
+                        dispatch=assignment,
+                    )
+
+                    for waiting_request in selected_requests:
+                        if (
+                            waiting_request.id
+                            not in reassigned_request_ids
+                        ):
+                            continue
+
+                        create_notification(
+                            recipient=(
+                                waiting_request.passenger
+                            ),
+                            notification_type=(
+                                Notification.Type.DISPATCH_REASSIGNED
+                            ),
+                            title="Taxi reassigned",
+                            message=(
+                                "A new driver has been assigned "
+                                "to your request."
+                            ),
+                            dispatch=assignment,
+                        )
+
+                else:
+                    create_notification(
+                        recipient=driver,
+                        notification_type=(
+                            Notification.Type.NEW_DISPATCH
+                        ),
+                        title="New dispatch",
+                        message=(
+                            f"You have been assigned to "
+                            f"{route.name}."
+                        ),
+                        dispatch=assignment,
+                    )
+
                 return assignment
 
         except IntegrityError:
@@ -745,3 +866,31 @@ class DispatchAssignmentSerializer(serializers.ModelSerializer):
                     )
                 }
             )
+
+class NotificationSerializer(
+    serializers.ModelSerializer
+):
+    class Meta:
+        model = Notification
+
+        fields = (
+            "id",
+            "notification_type",
+            "title",
+            "message",
+            "dispatch",
+            "is_read",
+            "created_at",
+        )
+
+        read_only_fields = fields
+
+
+class DeviceTokenSerializer(
+    serializers.Serializer
+):
+    token = serializers.CharField()
+
+    platform = serializers.ChoiceField(
+        choices=DeviceToken.Platform.choices
+    )

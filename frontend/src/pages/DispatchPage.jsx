@@ -57,6 +57,11 @@ export default function DispatchPage() {
   const [error, setError] =
     useState("");
 
+  const [
+  locationTrackingState,
+  setLocationTrackingState,
+  ] = useState("idle");
+
   const isDriver =
     user.role === "DRIVER";
 
@@ -76,6 +81,16 @@ export default function DispatchPage() {
     [assignments]
   );
 
+  const enRouteAssignmentId =
+  useMemo(
+    () =>
+      activeAssignments.find(
+        (assignment) =>
+          assignment.status
+          === "EN_ROUTE"
+      )?.id || null,
+    [activeAssignments]
+  );
 
   const loadData = useCallback(
     async (silent = false) => {
@@ -132,6 +147,155 @@ export default function DispatchPage() {
       );
     };
   }, [loadData]);
+
+useEffect(() => {
+  if (!isDriver || !enRouteAssignmentId) {
+    setLocationTrackingState("idle");
+    return undefined;
+  }
+
+  if (!navigator.geolocation) {
+    setLocationTrackingState("unsupported");
+    return undefined;
+  }
+
+  let stopped = false;
+  let watchId = null;
+  let lastSentAt = 0;
+  let latestPosition = null;
+  let retryTimer = null;
+
+  setLocationTrackingState("starting");
+
+  const sendPosition = async (
+    position,
+    retry = false
+  ) => {
+    if (stopped) {
+      return;
+    }
+
+    latestPosition = position;
+
+    const now = Date.now();
+
+    if (
+      !retry
+      && now - lastSentAt < 5000
+    ) {
+      return;
+    }
+
+    if (retryTimer !== null) {
+      window.clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+
+    lastSentAt = now;
+
+    const accuracy =
+      Number.isFinite(position.coords.accuracy)
+        ? position.coords.accuracy.toFixed(2)
+        : null;
+
+    try {
+      await api.post(
+        `/transport/dispatches/${enRouteAssignmentId}/location/`,
+        {
+          latitude:
+            position.coords.latitude.toFixed(6),
+          longitude:
+            position.coords.longitude.toFixed(6),
+          accuracy_meters: accuracy,
+        }
+      );
+
+      if (!stopped) {
+        setLocationTrackingState("active");
+      }
+    } catch (requestError) {
+      if (stopped) {
+        return;
+      }
+
+      const responseStatus =
+        requestError.response?.status;
+
+      if ([400, 403, 404].includes(responseStatus)) {
+        stopped = true;
+        setLocationTrackingState("stopped");
+
+        if (watchId !== null) {
+          navigator.geolocation.clearWatch(watchId);
+        }
+
+        return;
+      }
+
+      setLocationTrackingState("error");
+
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+      }
+
+      retryTimer = window.setTimeout(() => {
+        retryTimer = null;
+
+        if (!stopped && latestPosition) {
+          sendPosition(latestPosition, true);
+        }
+      }, 5000);
+    }
+  };
+
+  const handleLocationError = (locationError) => {
+    if (stopped) {
+      return;
+    }
+
+    if (locationError.code === 1) {
+      stopped = true;
+
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+
+      setLocationTrackingState("denied");
+
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+
+      return;
+    }
+
+    setLocationTrackingState("error");
+  };
+
+  watchId = navigator.geolocation.watchPosition(
+    sendPosition,
+    handleLocationError,
+    {
+      enableHighAccuracy: true,
+      maximumAge: 5000,
+      timeout: 15000,
+    }
+  );
+
+  return () => {
+    stopped = true;
+
+    if (retryTimer !== null) {
+      window.clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+
+    if (watchId !== null) {
+      navigator.geolocation.clearWatch(watchId);
+    }
+  };
+}, [isDriver, enRouteAssignmentId]);
 
 
   const handleBoardingCodeChange = (
@@ -452,6 +616,49 @@ export default function DispatchPage() {
                 {assignment.status
                   === "EN_ROUTE" && (
                   <>
+
+                    {locationTrackingState
+                        === "starting" && (
+                        <p className="empty-note">
+                          Starting live location
+                          sharing...
+                        </p>
+                      )}
+
+                      {locationTrackingState
+                        === "active" && (
+                        <p className="empty-note">
+                          Live taxi location is being
+                          shared with your assigned
+                          passengers.
+                        </p>
+                      )}
+
+                      {locationTrackingState
+                        === "denied" && (
+                        <div className="error-message">
+                          Location permission is required
+                          for live taxi tracking.
+                        </div>
+                      )}
+
+                      {locationTrackingState
+                        === "unsupported" && (
+                        <div className="error-message">
+                          Live location is not supported
+                          by this browser.
+                        </div>
+                      )}
+
+                      {locationTrackingState
+                        === "error" && (
+                        <div className="error-message">
+                          TaxiLink could not send your
+                          live location. Location sharing
+                          will retry when a new position
+                          is received.
+                        </div>
+                      )}
                     <div className="dispatch-pickups">
                       <h4>
                         Pickup Spots

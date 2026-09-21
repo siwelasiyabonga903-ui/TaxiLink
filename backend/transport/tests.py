@@ -4,15 +4,20 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from django.utils import timezone
 from datetime import timedelta
+from unittest.mock import patch
+import json
+from urllib.error import URLError
 
 from .models import (
     DispatchAssignment,
     DriverAvailability,
+    DriverLocation,
     Route,
     Trip,
     WaitingSpot,
     DispatchRequest,
     WaitingRequest,
+    Notification,
 )
 
 
@@ -166,6 +171,267 @@ class DispatchRejectionTests(APITestCase):
             self.assignment.status,
             DispatchAssignment.Status.PENDING,
         )
+
+    def test_waiting_passenger_can_be_dispatched_again_after_rejection(
+    self
+    ):
+        passenger = User.objects.create_user(
+            username="rejected_passenger",
+            email="rejected_passenger@example.com",
+            password="StrongPass123!",
+            role="PASSENGER",
+        )
+
+        waiting_request = WaitingRequest.objects.create(
+            passenger=passenger,
+            waiting_spot=self.waiting_spot,
+            party_size=2,
+            boarding_pin="R21",
+            passenger_latitude=self.waiting_spot.latitude,
+            passenger_longitude=self.waiting_spot.longitude,
+            distance_from_spot_meters="0.00",
+        )
+
+        DispatchRequest.objects.create(
+            dispatch=self.assignment,
+            waiting_request=waiting_request,
+        )
+
+        self.client.force_authenticate(
+            user=self.driver
+        )
+
+        reject_response = self.client.post(
+            self.reject_url()
+        )
+
+        self.assertEqual(
+            reject_response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        waiting_request.refresh_from_db()
+
+        self.assertEqual(
+            waiting_request.status,
+            WaitingRequest.Status.WAITING,
+        )
+
+        self.client.force_authenticate(
+            user=self.dispatcher
+        )
+
+        second_response = self.client.post(
+            reverse("dispatch-list"),
+            {
+                "driver": self.driver.id,
+                "route": self.route.id,
+                "notes": "Replacement dispatch.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            second_response.status_code,
+            status.HTTP_201_CREATED,
+        )
+
+        new_assignment = (
+            DispatchAssignment.objects.get(
+                pk=second_response.data["id"]
+            )
+        )
+
+        self.assertTrue(
+            DispatchRequest.objects.filter(
+                dispatch=new_assignment,
+                waiting_request=waiting_request,
+            ).exists()
+        )
+
+    def test_rejection_notifies_waiting_passenger_and_dispatcher(
+        self
+    ):
+        passenger = User.objects.create_user(
+            username="reject_notify_passenger",
+            email="reject_notify_passenger@example.com",
+            password="StrongPass123!",
+            role="PASSENGER",
+        )
+
+        waiting_request = WaitingRequest.objects.create(
+            passenger=passenger,
+            waiting_spot=self.waiting_spot,
+            party_size=2,
+            boarding_pin="R31",
+            passenger_latitude=self.waiting_spot.latitude,
+            passenger_longitude=self.waiting_spot.longitude,
+            distance_from_spot_meters="0.00",
+        )
+
+        DispatchRequest.objects.create(
+            dispatch=self.assignment,
+            waiting_request=waiting_request,
+        )
+
+        self.client.force_authenticate(
+            user=self.driver
+        )
+
+        response = self.client.post(
+            self.reject_url()
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        notifications = Notification.objects.filter(
+            dispatch=self.assignment,
+            notification_type=(
+                Notification.Type.DISPATCH_REJECTED
+            ),
+        )
+
+        recipient_ids = set(
+            notifications.values_list(
+                "recipient_id",
+                flat=True,
+            )
+        )
+
+        self.assertEqual(
+            recipient_ids,
+            {
+                passenger.id,
+                self.dispatcher.id,
+            },
+        )
+
+        self.assertEqual(
+            notifications.count(),
+            2,
+        )
+
+    def test_reassignment_notifies_passenger_and_new_driver(
+        self
+    ):
+        passenger = User.objects.create_user(
+            username="reassigned_passenger",
+            email="reassigned_passenger@example.com",
+            password="StrongPass123!",
+            role="PASSENGER",
+        )
+
+        waiting_request = WaitingRequest.objects.create(
+            passenger=passenger,
+            waiting_spot=self.waiting_spot,
+            party_size=2,
+            boarding_pin="R42",
+            passenger_latitude=self.waiting_spot.latitude,
+            passenger_longitude=self.waiting_spot.longitude,
+            distance_from_spot_meters="0.00",
+        )
+
+        DispatchRequest.objects.create(
+            dispatch=self.assignment,
+            waiting_request=waiting_request,
+        )
+
+        self.client.force_authenticate(
+            user=self.driver
+        )
+
+        reject_response = self.client.post(
+            self.reject_url()
+        )
+
+        self.assertEqual(
+            reject_response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        other_availability = (
+            DriverAvailability.objects.get(
+                driver=self.other_driver
+            )
+        )
+
+        other_availability.is_available = True
+        other_availability.save(
+            update_fields=[
+                "is_available",
+                "updated_at",
+            ]
+        )
+
+        self.client.force_authenticate(
+            user=self.dispatcher
+        )
+
+        response = self.client.post(
+            reverse("dispatch-list"),
+            {
+                "driver": self.other_driver.id,
+                "route": self.route.id,
+                "notes": "Replacement dispatch.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+        )
+
+        new_assignment = (
+            DispatchAssignment.objects.get(
+                pk=response.data["id"]
+            )
+        )
+
+        notifications = (
+            Notification.objects
+            .filter(
+                dispatch=new_assignment,
+                notification_type=(
+                    Notification.Type.DISPATCH_REASSIGNED
+                ),
+            )
+        )
+
+        recipient_ids = set(
+            notifications.values_list(
+                "recipient_id",
+                flat=True,
+            )
+        )
+
+        self.assertEqual(
+            recipient_ids,
+            {
+                passenger.id,
+                self.other_driver.id,
+            },
+        )
+
+        self.assertEqual(
+            notifications.count(),
+            2,
+        )
+
+        self.assertFalse(
+            Notification.objects.filter(
+                dispatch=new_assignment,
+                recipient=self.other_driver,
+                notification_type=(
+                    Notification.Type.NEW_DISPATCH
+                ),
+            ).exists()
+        )
+
+
 
 class DispatchRequestTests(APITestCase):
     def setUp(self):
@@ -509,6 +775,45 @@ class DispatchRequestTests(APITestCase):
             WaitingRequest.Status.WAITING,
         )
 
+    def test_new_dispatch_notifies_driver(
+            self
+        ):
+            response = self.create_dispatch()
+
+            self.assertEqual(
+                response.status_code,
+                status.HTTP_201_CREATED,
+            )
+
+            assignment = (
+                DispatchAssignment.objects.get(
+                    pk=response.data["id"]
+                )
+            )
+
+            notification = (
+                Notification.objects.get(
+                    recipient=self.driver,
+                    notification_type=(
+                        Notification.Type.NEW_DISPATCH
+                    ),
+                )
+            )
+
+            self.assertEqual(
+                notification.dispatch,
+                assignment,
+            )
+
+            self.assertEqual(
+                notification.title,
+                "New dispatch",
+            )
+
+            self.assertFalse(
+                notification.is_read
+            )
+
 class AcceptStartsTripTests(APITestCase):
     def setUp(self):
         self.dispatcher = User.objects.create_user(
@@ -530,6 +835,11 @@ class AcceptStartsTripTests(APITestCase):
             email="other_driver_accept@example.com",
             password="StrongPass123!",
             role="DRIVER",
+        )
+
+        DriverAvailability.objects.create(
+            driver=self.driver,
+            is_available=False,
         )
 
         self.route = Route.objects.create(
@@ -557,6 +867,62 @@ class AcceptStartsTripTests(APITestCase):
                     DispatchAssignment.Status.PENDING
                 ),
             )
+        )
+
+        self.passenger_one = User.objects.create_user(
+            username="accept_passenger_one",
+            email="accept_passenger_one@example.com",
+            password="StrongPass123!",
+            role="PASSENGER",
+        )
+
+        self.passenger_two = User.objects.create_user(
+            username="accept_passenger_two",
+            email="accept_passenger_two@example.com",
+            password="StrongPass123!",
+            role="PASSENGER",
+        )
+
+        self.waiting_request_one = (
+            WaitingRequest.objects.create(
+                passenger=self.passenger_one,
+                waiting_spot=self.waiting_spot,
+                party_size=1,
+                boarding_pin="A31",
+                passenger_latitude=(
+                    self.waiting_spot.latitude
+                ),
+                passenger_longitude=(
+                    self.waiting_spot.longitude
+                ),
+                distance_from_spot_meters="0.00",
+            )
+        )
+
+        self.waiting_request_two = (
+            WaitingRequest.objects.create(
+                passenger=self.passenger_two,
+                waiting_spot=self.waiting_spot,
+                party_size=1,
+                boarding_pin="A32",
+                passenger_latitude=(
+                    self.waiting_spot.latitude
+                ),
+                passenger_longitude=(
+                    self.waiting_spot.longitude
+                ),
+                distance_from_spot_meters="0.00",
+            )
+        )
+
+        DispatchRequest.objects.create(
+            dispatch=self.assignment,
+            waiting_request=self.waiting_request_one,
+        )
+
+        DispatchRequest.objects.create(
+            dispatch=self.assignment,
+            waiting_request=self.waiting_request_two,
         )
 
     def accept_url(self):
@@ -615,8 +981,13 @@ class AcceptStartsTripTests(APITestCase):
             user=self.driver
         )
 
-        self.client.post(
+        response = self.client.post(
             self.accept_url()
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
         )
 
         self.assignment.refresh_from_db()
@@ -659,6 +1030,151 @@ class AcceptStartsTripTests(APITestCase):
         self.assertEqual(
             response.status_code,
             status.HTTP_404_NOT_FOUND,
+        )
+
+    def test_accept_cancels_dispatch_when_all_passengers_cancelled(
+        self
+    ):
+        now = timezone.now()
+
+        WaitingRequest.objects.filter(
+            id__in=[
+                self.waiting_request_one.id,
+                self.waiting_request_two.id,
+            ]
+        ).update(
+            status=WaitingRequest.Status.CANCELLED,
+            ended_at=now,
+        )
+
+        self.client.force_authenticate(
+            user=self.driver
+        )
+
+        response = self.client.post(
+            self.accept_url()
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_409_CONFLICT,
+        )
+
+        self.assignment.refresh_from_db()
+
+        self.assertEqual(
+            self.assignment.status,
+            DispatchAssignment.Status.CANCELLED,
+        )
+
+        self.assertIsNotNone(
+            self.assignment.responded_at
+        )
+
+        self.assertFalse(
+            Trip.objects.filter(
+                dispatch=self.assignment
+            ).exists()
+        )
+
+        availability = (
+            DriverAvailability.objects.get(
+                driver=self.driver
+            )
+        )
+
+        self.assertTrue(
+            availability.is_available
+        )
+
+    def test_accept_succeeds_when_one_passenger_still_waiting(
+        self
+    ):
+        self.waiting_request_one.status = (
+            WaitingRequest.Status.CANCELLED
+        )
+
+        self.waiting_request_one.ended_at = (
+            timezone.now()
+        )
+
+        self.waiting_request_one.save(
+            update_fields=[
+                "status",
+                "ended_at",
+            ]
+        )
+
+        self.client.force_authenticate(
+            user=self.driver
+        )
+
+        response = self.client.post(
+            self.accept_url()
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        self.assignment.refresh_from_db()
+
+        self.assertEqual(
+            self.assignment.status,
+            DispatchAssignment.Status.EN_ROUTE,
+        )
+
+        self.assertTrue(
+            Trip.objects.filter(
+                dispatch=self.assignment
+            ).exists()
+        )
+    def test_accept_notifies_waiting_passengers_and_dispatcher(
+        self
+    ):
+        self.client.force_authenticate(
+            user=self.driver
+        )
+
+        response = self.client.post(
+            self.accept_url()
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        notifications = (
+            Notification.objects
+            .filter(
+                notification_type=(
+                    Notification.Type.DISPATCH_ACCEPTED
+                ),
+                dispatch=self.assignment,
+            )
+        )
+
+        recipient_ids = set(
+            notifications.values_list(
+                "recipient_id",
+                flat=True,
+            )
+        )
+
+        self.assertEqual(
+            recipient_ids,
+            {
+                self.passenger_one.id,
+                self.passenger_two.id,
+                self.dispatcher.id,
+            },
+        )
+
+        self.assertEqual(
+            notifications.count(),
+            3,
         )
 
 
@@ -1702,6 +2218,39 @@ class PassengerDispatchVisibilityTests(APITestCase):
             WaitingRequest.Status.WAITING,
         )
 
+    def test_en_route_dispatch_returns_tracking_ids(
+        self
+    ):
+        self.assignment.status = (
+            DispatchAssignment.Status.EN_ROUTE
+        )
+
+        self.assignment.save(
+            update_fields=[
+                "status",
+            ]
+        )
+
+        response = self.client.get(
+            self.url
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        self.assertEqual(
+            response.data["dispatch"]["id"],
+            self.assignment.id,
+        )
+
+        self.assertEqual(
+            response.data["dispatch"]["route_id"],
+            self.route.id,
+        )
+
+
 class DispatcherCancellationTests(
     APITestCase
 ):
@@ -2080,6 +2629,48 @@ class DispatcherCancellationTests(
                 ),
             ).exists()
         )
+
+    def test_cancellation_notifies_affected_users_and_dispatcher(
+        self
+    ):
+        response = self.cancel_as_dispatcher()
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        notifications = (
+            Notification.objects
+            .filter(
+                dispatch=self.assignment,
+                notification_type=(
+                    Notification.Type.DISPATCH_CANCELLED
+                ),
+            )
+        )
+
+        recipient_ids = set(
+            notifications.values_list(
+                "recipient_id",
+                flat=True,
+            )
+        )
+
+        self.assertEqual(
+            recipient_ids,
+            {
+                self.passenger.id,
+                self.driver.id,
+                self.dispatcher.id,
+            },
+        )
+
+        self.assertEqual(
+            notifications.count(),
+            3,
+        )
+
 
 class TripCompletionIntegrityTests(APITestCase):
     def setUp(self):
@@ -2856,3 +3447,1626 @@ class WaitingDemandVisibilityTests(
             "active_waiting_count",
             spot,
         )
+
+class AvailableDriverQueueTests(APITestCase):
+    def setUp(self):
+        self.dispatcher = User.objects.create_user(
+            username="queue_dispatcher",
+            email="queue_dispatcher@example.com",
+            password="StrongPass123!",
+            role="DISPATCHER",
+        )
+
+        self.driver_oldest = User.objects.create_user(
+            username="charlie_driver",
+            email="charlie_driver@example.com",
+            password="StrongPass123!",
+            role="DRIVER",
+        )
+
+        self.driver_middle = User.objects.create_user(
+            username="bravo_driver",
+            email="bravo_driver@example.com",
+            password="StrongPass123!",
+            role="DRIVER",
+        )
+
+        self.driver_newest = User.objects.create_user(
+            username="alpha_driver",
+            email="alpha_driver@example.com",
+            password="StrongPass123!",
+            role="DRIVER",
+        )
+
+        self.oldest_availability = (
+            DriverAvailability.objects.create(
+                driver=self.driver_oldest,
+                is_available=True,
+            )
+        )
+
+        self.middle_availability = (
+            DriverAvailability.objects.create(
+                driver=self.driver_middle,
+                is_available=True,
+            )
+        )
+
+        self.newest_availability = (
+            DriverAvailability.objects.create(
+                driver=self.driver_newest,
+                is_available=True,
+            )
+        )
+
+        now = timezone.now()
+
+        DriverAvailability.objects.filter(
+            pk=self.oldest_availability.pk
+        ).update(
+            updated_at=now - timedelta(minutes=30)
+        )
+
+        DriverAvailability.objects.filter(
+            pk=self.middle_availability.pk
+        ).update(
+            updated_at=now - timedelta(minutes=20)
+        )
+
+        DriverAvailability.objects.filter(
+            pk=self.newest_availability.pk
+        ).update(
+            updated_at=now - timedelta(minutes=10)
+        )
+
+        self.url = reverse(
+            "available-drivers"
+        )
+
+    def test_available_drivers_are_ordered_oldest_first(
+        self
+    ):
+        self.client.force_authenticate(
+            user=self.dispatcher
+        )
+
+        response = self.client.get(
+            self.url
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        usernames = [
+            driver["username"]
+            for driver in response.data
+        ]
+
+        self.assertEqual(
+            usernames,
+            [
+                "charlie_driver",
+                "bravo_driver",
+                "alpha_driver",
+            ],
+        )
+
+    def test_driver_with_active_dispatch_is_excluded(
+        self
+    ):
+        route = Route.objects.create(
+            name="Queue Test Route",
+            origin="Campus",
+            destination="Town",
+        )
+
+        DispatchAssignment.objects.create(
+            dispatcher=self.dispatcher,
+            driver=self.driver_oldest,
+            route=route,
+            passenger_count=1,
+            status=(
+                DispatchAssignment.Status.PENDING
+            ),
+        )
+
+        self.client.force_authenticate(
+            user=self.dispatcher
+        )
+
+        response = self.client.get(
+            self.url
+        )
+
+        usernames = [
+            driver["username"]
+            for driver in response.data
+        ]
+
+        self.assertNotIn(
+            "charlie_driver",
+            usernames,
+        )
+
+    def test_unavailable_driver_is_excluded(
+        self
+    ):
+        self.middle_availability\
+            .is_available = False
+
+        self.middle_availability.save(
+            update_fields=[
+                "is_available",
+                "updated_at",
+            ]
+        )
+
+        self.client.force_authenticate(
+            user=self.dispatcher
+        )
+
+        response = self.client.get(
+            self.url
+        )
+
+        usernames = [
+            driver["username"]
+            for driver in response.data
+        ]
+
+        self.assertNotIn(
+            "bravo_driver",
+            usernames,
+        )
+
+class DriverLocationTrackingTests(
+    APITestCase
+):
+    def setUp(self):
+        self.dispatcher = (
+            User.objects.create_user(
+                username=(
+                    "tracking_dispatcher"
+                ),
+                email=(
+                    "tracking_dispatcher"
+                    "@example.com"
+                ),
+                password=(
+                    "StrongPass123!"
+                ),
+                role="DISPATCHER",
+            )
+        )
+
+        self.driver = (
+            User.objects.create_user(
+                username="tracking_driver",
+                email=(
+                    "tracking_driver"
+                    "@example.com"
+                ),
+                password=(
+                    "StrongPass123!"
+                ),
+                role="DRIVER",
+            )
+        )
+
+        self.other_driver = (
+            User.objects.create_user(
+                username=(
+                    "tracking_other_driver"
+                ),
+                email=(
+                    "tracking_other_driver"
+                    "@example.com"
+                ),
+                password=(
+                    "StrongPass123!"
+                ),
+                role="DRIVER",
+            )
+        )
+
+        self.passenger = (
+            User.objects.create_user(
+                username=(
+                    "tracking_passenger"
+                ),
+                email=(
+                    "tracking_passenger"
+                    "@example.com"
+                ),
+                password=(
+                    "StrongPass123!"
+                ),
+                role="PASSENGER",
+            )
+        )
+
+        self.other_passenger = (
+            User.objects.create_user(
+                username=(
+                    "tracking_other_passenger"
+                ),
+                email=(
+                    "tracking_other_passenger"
+                    "@example.com"
+                ),
+                password=(
+                    "StrongPass123!"
+                ),
+                role="PASSENGER",
+            )
+        )
+
+        self.route = (
+            Route.objects.create(
+                name=(
+                    "Tracking Test Route"
+                ),
+                origin="Campus",
+                destination="Town",
+            )
+        )
+
+        self.spot = (
+            WaitingSpot.objects.create(
+                route=self.route,
+                name=(
+                    "Tracking Test Spot"
+                ),
+                latitude="-23.884500",
+                longitude="29.738200",
+                geofence_radius_meters=100,
+            )
+        )
+
+        self.waiting_request = (
+            WaitingRequest.objects.create(
+                passenger=self.passenger,
+                waiting_spot=self.spot,
+                party_size=2,
+                boarding_pin="T21",
+                passenger_latitude=(
+                    self.spot.latitude
+                ),
+                passenger_longitude=(
+                    self.spot.longitude
+                ),
+                distance_from_spot_meters=(
+                    "0.00"
+                ),
+            )
+        )
+
+        self.assignment = (
+            DispatchAssignment.objects.create(
+                dispatcher=self.dispatcher,
+                driver=self.driver,
+                route=self.route,
+                passenger_count=2,
+                status=(
+                    DispatchAssignment
+                    .Status
+                    .EN_ROUTE
+                ),
+            )
+        )
+
+        DispatchRequest.objects.create(
+            dispatch=self.assignment,
+            waiting_request=(
+                self.waiting_request
+            ),
+        )
+
+    def location_url(self):
+        return reverse(
+            "dispatch-location",
+            kwargs={
+                "pk": self.assignment.pk,
+            },
+        )
+
+    def post_location(
+        self,
+        user=None,
+        latitude="-23.885000",
+        longitude="29.739000",
+        accuracy="8.50",
+    ):
+        self.client.force_authenticate(
+            user=(
+                user
+                or self.driver
+            )
+        )
+
+        return self.client.post(
+            self.location_url(),
+            {
+                "latitude": latitude,
+                "longitude": longitude,
+                "accuracy_meters": accuracy,
+            },
+            format="json",
+        )
+
+    def create_location(self):
+        return (
+            DriverLocation.objects.create(
+                dispatch=self.assignment,
+                latitude="-23.885000",
+                longitude="29.739000",
+                accuracy_meters="8.50",
+            )
+        )
+
+    def test_assigned_driver_can_update_location(
+        self
+    ):
+        response = self.post_location()
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+        )
+
+        location = (
+            DriverLocation.objects.get(
+                dispatch=self.assignment
+            )
+        )
+
+        self.assertEqual(
+            float(location.latitude),
+            -23.885,
+        )
+
+        self.assertEqual(
+            float(location.longitude),
+            29.739,
+        )
+
+    def test_location_update_overwrites_existing_row(
+        self
+    ):
+        first_response = (
+            self.post_location()
+        )
+
+        second_response = (
+            self.post_location(
+                latitude="-23.886000",
+                longitude="29.740000",
+                accuracy="5.00",
+            )
+        )
+
+        self.assertEqual(
+            first_response.status_code,
+            status.HTTP_201_CREATED,
+        )
+
+        self.assertEqual(
+            second_response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        self.assertEqual(
+            DriverLocation.objects.filter(
+                dispatch=self.assignment
+            ).count(),
+            1,
+        )
+
+        location = (
+            DriverLocation.objects.get(
+                dispatch=self.assignment
+            )
+        )
+
+        self.assertEqual(
+            float(location.latitude),
+            -23.886,
+        )
+
+        self.assertEqual(
+            float(location.longitude),
+            29.74,
+        )
+
+    def test_other_driver_cannot_update_location(
+        self
+    ):
+        response = self.post_location(
+            user=self.other_driver
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+        self.assertFalse(
+            DriverLocation.objects.filter(
+                dispatch=self.assignment
+            ).exists()
+        )
+
+    def test_driver_cannot_update_non_en_route_dispatch(
+        self
+    ):
+        self.assignment.status = (
+            DispatchAssignment
+            .Status
+            .COMPLETED
+        )
+
+        self.assignment.save(
+            update_fields=[
+                "status",
+            ]
+        )
+
+        response = self.post_location()
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+        self.assertFalse(
+            DriverLocation.objects.filter(
+                dispatch=self.assignment
+            ).exists()
+        )
+
+    def test_invalid_coordinates_are_rejected(
+        self
+    ):
+        response = self.post_location(
+            latitude="100",
+            longitude="29.739000",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+        self.assertFalse(
+            DriverLocation.objects.filter(
+                dispatch=self.assignment
+            ).exists()
+        )
+
+    def test_linked_waiting_passenger_can_get_location(
+        self
+    ):
+        self.create_location()
+
+        self.client.force_authenticate(
+            user=self.passenger
+        )
+
+        response = self.client.get(
+            self.location_url()
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        self.assertTrue(
+            response.data["available"]
+        )
+
+        self.assertEqual(
+            response.data["dispatch"],
+            self.assignment.id,
+        )
+
+        self.assertEqual(
+            response.data["latitude"],
+            -23.885,
+        )
+
+        self.assertEqual(
+            response.data["longitude"],
+            29.739,
+        )
+
+    def test_unrelated_passenger_cannot_get_location(
+        self
+    ):
+        self.create_location()
+
+        self.client.force_authenticate(
+            user=self.other_passenger
+        )
+
+        response = self.client.get(
+            self.location_url()
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+    def test_dispatcher_can_get_location(
+        self
+    ):
+        self.create_location()
+
+        self.client.force_authenticate(
+            user=self.dispatcher
+        )
+
+        response = self.client.get(
+            self.location_url()
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        self.assertTrue(
+            response.data["available"]
+        )
+
+    def test_no_location_returns_available_false(
+        self
+    ):
+        self.client.force_authenticate(
+            user=self.passenger
+        )
+
+        response = self.client.get(
+            self.location_url()
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        self.assertFalse(
+            response.data["available"]
+        )
+
+        self.assertIsNone(
+            response.data["location"]
+        )
+
+    def test_location_not_exposed_after_dispatch_ends(
+        self
+    ):
+        self.create_location()
+
+        self.assignment.status = (
+            DispatchAssignment
+            .Status
+            .COMPLETED
+        )
+
+        self.assignment.save(
+            update_fields=[
+                "status",
+            ]
+        )
+
+        self.client.force_authenticate(
+            user=self.dispatcher
+        )
+
+        response = self.client.get(
+            self.location_url()
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+class PassengerPickupRouteTests(
+    APITestCase
+):
+    def setUp(self):
+        self.dispatcher = (
+            User.objects.create_user(
+                username="pickup_dispatcher",
+                email="pickup_dispatcher@example.com",
+                password="StrongPass123!",
+                role="DISPATCHER",
+            )
+        )
+
+        self.driver = (
+            User.objects.create_user(
+                username="pickup_driver",
+                email="pickup_driver@example.com",
+                password="StrongPass123!",
+                role="DRIVER",
+            )
+        )
+
+        self.passenger = (
+            User.objects.create_user(
+                username="pickup_passenger",
+                email="pickup_passenger@example.com",
+                password="StrongPass123!",
+                role="PASSENGER",
+            )
+        )
+
+        self.early_passenger_one = (
+            User.objects.create_user(
+                username="pickup_early_one",
+                email="pickup_early_one@example.com",
+                password="StrongPass123!",
+                role="PASSENGER",
+            )
+        )
+
+        self.early_passenger_two = (
+            User.objects.create_user(
+                username="pickup_early_two",
+                email="pickup_early_two@example.com",
+                password="StrongPass123!",
+                role="PASSENGER",
+            )
+        )
+
+        self.later_passenger = (
+            User.objects.create_user(
+                username="pickup_later",
+                email="pickup_later@example.com",
+                password="StrongPass123!",
+                role="PASSENGER",
+            )
+        )
+
+        self.other_passenger = (
+            User.objects.create_user(
+                username="pickup_other",
+                email="pickup_other@example.com",
+                password="StrongPass123!",
+                role="PASSENGER",
+            )
+        )
+
+        self.route = Route.objects.create(
+            name="Passenger Pickup Route",
+            origin="Start",
+            destination="End",
+        )
+
+        self.spot_one = (
+            WaitingSpot.objects.create(
+                route=self.route,
+                name="Spot 1",
+                latitude="-23.880000",
+                longitude="29.730000",
+                geofence_radius_meters=100,
+                stop_order=1,
+            )
+        )
+
+        self.spot_two = (
+            WaitingSpot.objects.create(
+                route=self.route,
+                name="Spot 2",
+                latitude="-23.881000",
+                longitude="29.731000",
+                geofence_radius_meters=100,
+                stop_order=2,
+            )
+        )
+
+        self.spot_three = (
+            WaitingSpot.objects.create(
+                route=self.route,
+                name="Spot 3",
+                latitude="-23.882000",
+                longitude="29.732000",
+                geofence_radius_meters=100,
+                stop_order=3,
+            )
+        )
+
+        self.spot_four = (
+            WaitingSpot.objects.create(
+                route=self.route,
+                name="Spot 4",
+                latitude="-23.883000",
+                longitude="29.733000",
+                geofence_radius_meters=100,
+                stop_order=4,
+            )
+        )
+
+        self.assignment = (
+            DispatchAssignment.objects.create(
+                dispatcher=self.dispatcher,
+                driver=self.driver,
+                route=self.route,
+                passenger_count=4,
+                status=(
+                    DispatchAssignment
+                    .Status
+                    .EN_ROUTE
+                ),
+            )
+        )
+
+        self.request_one = (
+            self.create_request(
+                user=self.early_passenger_one,
+                spot=self.spot_one,
+                code="P11",
+            )
+        )
+
+        self.request_two = (
+            self.create_request(
+                user=self.early_passenger_two,
+                spot=self.spot_two,
+                code="P22",
+            )
+        )
+
+        self.passenger_request = (
+            self.create_request(
+                user=self.passenger,
+                spot=self.spot_three,
+                code="P33",
+            )
+        )
+
+        self.request_four = (
+            self.create_request(
+                user=self.later_passenger,
+                spot=self.spot_four,
+                code="P44",
+            )
+        )
+
+        self.driver_location = (
+            DriverLocation.objects.create(
+                dispatch=self.assignment,
+                latitude="-23.879000",
+                longitude="29.729000",
+                accuracy_meters="5.00",
+            )
+        )
+
+        self.url = (
+            f"/api/transport/dispatches/"
+            f"{self.assignment.id}/"
+            f"passenger-route/"
+        )
+
+        self.client.force_authenticate(
+            user=self.passenger
+        )
+
+    def _tracking_urls(self):
+        return (
+            f"/api/transport/dispatches/{self.assignment.pk}/location/",
+            self.url,
+        )
+
+    @staticmethod
+    def _tracking_geojson(coordinates):
+        return {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": coordinates,
+                    },
+                    "properties": {},
+                }
+            ],
+        }
+
+    def _assert_tracking_access(self, expected_status):
+        before = self._routing_state()
+
+        with patch(
+            "transport.views.get_coordinates_geojson",
+            side_effect=self._tracking_geojson,
+        ) as routing:
+            for url in self._tracking_urls():
+                with self.subTest(url=url, expected=expected_status):
+                    response = self.client.get(url)
+
+                    self.assertEqual(self._routing_state(), before)
+                    self.assertEqual(
+                        response.status_code,
+                        expected_status,
+                    )
+
+                    if expected_status == status.HTTP_200_OK:
+                        self.assertTrue(response.data["available"])
+                    else:
+                        self.assertEqual(
+                            set(response.data),
+                            {"detail"},
+                        )
+
+            if expected_status == status.HTTP_200_OK:
+                routing.assert_called_once()
+            else:
+                routing.assert_not_called()
+
+    def _board_for_tracking(self, waiting_request):
+        Trip.objects.get_or_create(
+            dispatch=self.assignment,
+            defaults={"en_route_at": timezone.now()},
+        )
+        self.client.force_authenticate(user=self.driver)
+
+        response = self.client.post(
+            reverse(
+                "dispatch-confirm-boarding",
+                kwargs={"pk": self.assignment.pk},
+            ),
+            {
+                "waiting_spot": waiting_request.waiting_spot_id,
+                "boarding_pin": waiting_request.boarding_pin,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        waiting_request.refresh_from_db()
+        self.assertEqual(
+            waiting_request.status,
+            WaitingRequest.Status.BOARDED,
+        )
+        self.client.force_authenticate(user=self.passenger)
+
+    def test_cancellation_revokes_both_tracking_endpoints(self):
+        self._assert_tracking_access(status.HTTP_200_OK)
+
+        response = self.client.post(reverse("cancel-waiting-request"))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.passenger_request.refresh_from_db()
+        self.assignment.refresh_from_db()
+
+        self.assertEqual(
+            self.passenger_request.status,
+            WaitingRequest.Status.CANCELLED,
+        )
+        self.assertEqual(
+            self.assignment.status,
+            DispatchAssignment.Status.EN_ROUTE,
+        )
+
+        self._assert_tracking_access(status.HTTP_403_FORBIDDEN)
+
+    def test_boarding_revokes_both_tracking_endpoints(self):
+        self._assert_tracking_access(status.HTTP_200_OK)
+        self._board_for_tracking(self.passenger_request)
+
+        self.assignment.refresh_from_db()
+        self.assertEqual(
+            self.assignment.status,
+            DispatchAssignment.Status.EN_ROUTE,
+        )
+
+        self._assert_tracking_access(status.HTTP_403_FORBIDDEN)
+
+    def test_other_driver_cannot_read_tracking_endpoints(self):
+        other_driver = User.objects.create_user(
+            username="tracking_other_driver",
+            email="tracking_other_driver@example.com",
+            password="StrongPass123!",
+            role="DRIVER",
+        )
+
+        self.client.force_authenticate(user=other_driver)
+        self._assert_tracking_access(status.HTTP_403_FORBIDDEN)
+
+    def test_anonymous_user_cannot_read_tracking_endpoints(self):
+        self.client.force_authenticate(user=None)
+        self._assert_tracking_access(status.HTTP_401_UNAUTHORIZED)
+
+    def test_boarded_earlier_stop_is_removed_from_pickup_route(self):
+        self._board_for_tracking(self.request_one)
+        before = self._routing_state()
+
+        coordinates = [
+            [29.729, -23.879],
+            [29.731, -23.881],
+            [29.732, -23.882],
+        ]
+
+        with patch(
+            "transport.views.get_coordinates_geojson",
+            side_effect=self._tracking_geojson,
+        ) as routing:
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            [spot["id"] for spot in response.data["pickup_spots"]],
+            [self.spot_two.pk, self.spot_three.pk],
+        )
+
+        routing.assert_called_once_with(coordinates)
+
+        self.assertEqual(
+            response.data["route"]["features"][0]["geometry"]["coordinates"],
+            coordinates,
+        )
+        self.assertEqual(self._routing_state(), before)
+
+    def test_driver_gps_update_changes_pickup_route_start(self):
+        with patch(
+            "transport.views.get_coordinates_geojson",
+            side_effect=self._tracking_geojson,
+        ) as routing:
+            first_response = self.client.get(self.url)
+            self.assertEqual(
+                first_response.status_code,
+                status.HTTP_200_OK,
+            )
+
+            original_coordinates = routing.call_args.args[0]
+            self.assertEqual(
+                original_coordinates[0],
+                [29.729, -23.879],
+            )
+
+            self.client.force_authenticate(user=self.driver)
+            update_response = self.client.post(
+                self._tracking_urls()[0],
+                {
+                    "latitude": "-23.878500",
+                    "longitude": "29.728500",
+                    "accuracy_meters": "4.00",
+                },
+                format="json",
+            )
+            self.assertEqual(
+                update_response.status_code,
+                status.HTTP_200_OK,
+            )
+
+            self.client.force_authenticate(user=self.passenger)
+            before = self._routing_state()
+            second_response = self.client.get(self.url)
+
+        self.assertEqual(second_response.status_code, status.HTTP_200_OK)
+
+        expected_coordinates = [
+            [29.7285, -23.8785],
+            *original_coordinates[1:],
+        ]
+
+        self.assertEqual(routing.call_count, 2)
+        routing.assert_called_with(expected_coordinates)
+
+        self.assertEqual(
+            second_response.data["route"]["features"][0]["geometry"]["coordinates"],
+            expected_coordinates,
+        )
+        self.assertEqual(
+            second_response.data["driver_location"]["latitude"],
+            -23.8785,
+        )
+        self.assertEqual(
+            second_response.data["driver_location"]["longitude"],
+            29.7285,
+        )
+        self.assertEqual(
+            DriverLocation.objects.filter(dispatch=self.assignment).count(),
+            1,
+        )
+
+        self.assignment.refresh_from_db()
+        self.assertEqual(
+            self.assignment.status,
+            DispatchAssignment.Status.EN_ROUTE,
+        )
+        self.assertEqual(self._routing_state(), before)
+
+    def create_request(
+        self,
+        user,
+        spot,
+        code,
+    ):
+        waiting_request = (
+            WaitingRequest.objects.create(
+                passenger=user,
+                waiting_spot=spot,
+                party_size=1,
+                boarding_pin=code,
+                passenger_latitude=(
+                    spot.latitude
+                ),
+                passenger_longitude=(
+                    spot.longitude
+                ),
+                distance_from_spot_meters="0.00",
+            )
+        )
+
+        DispatchRequest.objects.create(
+            dispatch=self.assignment,
+            waiting_request=waiting_request,
+        )
+
+        return waiting_request
+
+    @patch(
+        "transport.views."
+        "get_coordinates_geojson"
+    )
+    def test_route_goes_through_waiting_spots_before_passenger(
+        self,
+        mock_route,
+    ):
+        mock_route.return_value = {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": [],
+                    },
+                    "properties": {},
+                }
+            ],
+        }
+
+        response = self.client.get(
+            self.url
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        pickup_ids = [
+            spot["id"]
+            for spot
+            in response.data[
+                "pickup_spots"
+            ]
+        ]
+
+        self.assertEqual(
+            pickup_ids,
+            [
+                self.spot_one.id,
+                self.spot_two.id,
+                self.spot_three.id,
+            ],
+        )
+
+        self.assertNotIn(
+            self.spot_four.id,
+            pickup_ids,
+        )
+
+        mock_route.assert_called_once_with(
+            [
+                [
+                    29.729,
+                    -23.879,
+                ],
+                [
+                    29.73,
+                    -23.88,
+                ],
+                [
+                    29.731,
+                    -23.881,
+                ],
+                [
+                    29.732,
+                    -23.882,
+                ],
+            ]
+        )
+
+    @patch(
+        "transport.views."
+        "get_coordinates_geojson"
+    )
+    def test_empty_earlier_spots_are_skipped(
+        self,
+        mock_route,
+    ):
+        self.request_one.status = (
+            WaitingRequest.Status.CANCELLED
+        )
+
+        self.request_one.ended_at = (
+            timezone.now()
+        )
+
+        self.request_one.save(
+            update_fields=[
+                "status",
+                "ended_at",
+            ]
+        )
+
+        self.request_two.status = (
+            WaitingRequest.Status.CANCELLED
+        )
+
+        self.request_two.ended_at = (
+            timezone.now()
+        )
+
+        self.request_two.save(
+            update_fields=[
+                "status",
+                "ended_at",
+            ]
+        )
+
+        mock_route.return_value = {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": [],
+                    },
+                    "properties": {},
+                }
+            ],
+        }
+
+        response = self.client.get(
+            self.url
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        pickup_ids = [
+            spot["id"]
+            for spot
+            in response.data[
+                "pickup_spots"
+            ]
+        ]
+
+        self.assertEqual(
+            pickup_ids,
+            [
+                self.spot_three.id,
+            ],
+        )
+
+        mock_route.assert_called_once_with(
+            [
+                [
+                    29.729,
+                    -23.879,
+                ],
+                [
+                    29.732,
+                    -23.882,
+                ],
+            ]
+        )
+
+    @patch(
+        "transport.views."
+        "get_coordinates_geojson"
+    )
+    def test_no_driver_location_returns_unavailable(
+        self,
+        mock_route,
+    ):
+        self.driver_location.delete()
+
+        response = self.client.get(
+            self.url
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        self.assertFalse(
+            response.data["available"]
+        )
+
+        self.assertIsNone(
+            response.data[
+                "driver_location"
+            ]
+        )
+
+        self.assertIsNone(
+            response.data["route"]
+        )
+
+        mock_route.assert_not_called()
+
+    @patch(
+        "transport.views."
+        "get_coordinates_geojson"
+    )
+    def test_boarded_passenger_can_no_longer_track(
+        self,
+        mock_route,
+    ):
+        self.passenger_request.status = (
+            WaitingRequest.Status.BOARDED
+        )
+
+        self.passenger_request.ended_at = (
+            timezone.now()
+        )
+
+        self.passenger_request.save(
+            update_fields=[
+                "status",
+                "ended_at",
+            ]
+        )
+
+        link = (
+            DispatchRequest.objects.get(
+                dispatch=self.assignment,
+                waiting_request=(
+                    self.passenger_request
+                ),
+            )
+        )
+
+        link.boarded = True
+        link.boarded_at = timezone.now()
+
+        link.save(
+            update_fields=[
+                "boarded",
+                "boarded_at",
+            ]
+        )
+
+        response = self.client.get(
+            self.url
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+        mock_route.assert_not_called()
+
+    @patch(
+        "transport.views."
+        "get_coordinates_geojson"
+    )
+    def test_unrelated_passenger_cannot_track(
+        self,
+        mock_route,
+    ):
+        self.client.force_authenticate(
+            user=self.other_passenger
+        )
+
+        response = self.client.get(
+            self.url
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+        mock_route.assert_not_called()
+
+    @patch(
+        "transport.views."
+        "get_coordinates_geojson"
+    )
+    def test_tracking_requires_en_route_dispatch(
+        self,
+        mock_route,
+    ):
+        self.assignment.status = (
+            DispatchAssignment
+            .Status
+            .COMPLETED
+        )
+
+        self.assignment.save(
+            update_fields=[
+                "status",
+            ]
+        )
+
+        response = self.client.get(
+            self.url
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+        mock_route.assert_not_called()
+
+    def _routing_state(self):
+            return {
+                model.__name__: list(
+                    model.objects.order_by("pk").values()
+                )
+                for model in (
+                    DispatchAssignment,
+                    DispatchRequest,
+                    WaitingRequest,
+                    Trip,
+                    DriverAvailability,
+                    DriverLocation,
+                    Notification,
+                )
+            }
+
+    def _prepare_routing_failure_checks(self):
+            # Return HTTP 500 responses so assertions expose unhandled errors.
+            self.client.raise_request_exception = False
+
+            Trip.objects.get_or_create(
+                dispatch=self.assignment,
+                defaults={"en_route_at": timezone.now()},
+            )
+
+            DriverAvailability.objects.update_or_create(
+                driver=self.driver,
+                defaults={"is_available": False},
+            )
+
+            return self._routing_state()
+
+    def _routing_urls(self):
+            return (
+                f"/api/transport/routes/{self.route.pk}/road-route/",
+                self.url,
+            )
+
+    def _assert_routing_error_preserves_state(
+            self,
+            response,
+            before,
+        ):
+            self.assertEqual(
+                self._routing_state(),
+                before,
+            )
+
+            self.assertEqual(
+                response.status_code,
+                status.HTTP_400_BAD_REQUEST,
+                msg=(
+                    "Expected a handled routing error; "
+                    f"received {response.status_code}."
+                ),
+            )
+
+            self.assertIn("detail", response.data)
+            self.assertTrue(response.data["detail"])
+
+    def test_routing_timeouts_preserve_trip_state(self):
+            before = self._prepare_routing_failure_checks()
+
+            with self.settings(
+                OPENROUTESERVICE_API_KEY="routing-test-key"
+            ):
+                for url in self._routing_urls():
+                    for phase in ("connect", "read"):
+                        with self.subTest(url=url, phase=phase):
+                            with patch(
+                                "transport.routing_service.urlopen"
+                            ) as provider:
+                                error = TimeoutError(
+                                    "Simulated routing timeout"
+                                )
+
+                                if phase == "connect":
+                                    provider.side_effect = error
+                                else:
+                                    provider_response = (
+                                        provider.return_value
+                                        .__enter__.return_value
+                                    )
+                                    provider_response.read.side_effect = (
+                                        error
+                                    )
+
+                                response = self.client.get(url)
+
+                            provider.assert_called_once()
+
+                            self._assert_routing_error_preserves_state(
+                                response,
+                                before,
+                            )
+
+    def test_routing_non_object_json_preserves_trip_state(self):
+            before = self._prepare_routing_failure_checks()
+
+            with self.settings(
+                OPENROUTESERVICE_API_KEY="routing-test-key"
+            ):
+                for url in self._routing_urls():
+                    for payload in (b"[]", b"null"):
+                        with self.subTest(url=url, payload=payload):
+                            with patch(
+                                "transport.routing_service.urlopen"
+                            ) as provider:
+                                provider_response = (
+                                    provider.return_value
+                                    .__enter__.return_value
+                                )
+                                provider_response.read.return_value = (
+                                    payload
+                                )
+
+                                response = self.client.get(url)
+
+                            provider.assert_called_once()
+
+                            self._assert_routing_error_preserves_state(
+                                response,
+                                before,
+                            )
+    def test_routing_invalid_json_preserves_trip_state(self):
+            before = self._prepare_routing_failure_checks()
+
+            with self.settings(
+                OPENROUTESERVICE_API_KEY="routing-test-key"
+            ):
+                for url in self._routing_urls():
+                    with self.subTest(url=url):
+                        with patch(
+                            "transport.routing_service.urlopen"
+                        ) as provider:
+                            provider_response = (
+                                provider.return_value
+                                .__enter__.return_value
+                            )
+                            provider_response.read.return_value = (
+                                b"not JSON"
+                            )
+
+                            response = self.client.get(url)
+
+                        provider.assert_called_once()
+
+                        self._assert_routing_error_preserves_state(
+                            response,
+                            before,
+                        )
+
+    def test_routing_connection_failure_preserves_trip_state(self):
+            before = self._prepare_routing_failure_checks()
+
+            with self.settings(
+                OPENROUTESERVICE_API_KEY="routing-test-key"
+            ):
+                for url in self._routing_urls():
+                    with self.subTest(url=url):
+                        with patch(
+                            "transport.routing_service.urlopen",
+                            side_effect=URLError(
+                                "Simulated provider outage"
+                            ),
+                        ) as provider:
+                            response = self.client.get(url)
+
+                        provider.assert_called_once()
+
+                        self._assert_routing_error_preserves_state(
+                            response,
+                            before,
+                        )
+
+    def test_routing_recovers_after_provider_outage(self):
+            before = self._prepare_routing_failure_checks()
+
+            with self.settings(
+                OPENROUTESERVICE_API_KEY="routing-test-key"
+            ):
+                for url in self._routing_urls():
+                    with self.subTest(url=url):
+                        with patch(
+                            "transport.routing_service.urlopen"
+                        ) as provider:
+                            successful_response = provider.return_value
+
+                            provider.side_effect = [
+                                URLError("Simulated provider outage"),
+                                successful_response,
+                            ]
+
+                            failed_response = self.client.get(url)
+
+                            self._assert_routing_error_preserves_state(
+                                failed_response,
+                                before,
+                            )
+
+                            # Return a valid route using the coordinates
+                            # actually submitted to the provider.
+                            coordinates = json.loads(
+                                provider.call_args.args[0].data
+                            )["coordinates"]
+
+                            route_data = {
+                                "type": "FeatureCollection",
+                                "features": [
+                                    {
+                                        "type": "Feature",
+                                        "geometry": {
+                                            "type": "LineString",
+                                            "coordinates": coordinates,
+                                        },
+                                        "properties": {},
+                                    }
+                                ],
+                            }
+
+                            provider_response = (
+                                successful_response
+                                .__enter__.return_value
+                            )
+                            provider_response.read.return_value = (
+                                json.dumps(route_data).encode("utf-8")
+                            )
+
+                            recovered_response = self.client.get(url)
+
+                        self.assertEqual(provider.call_count, 2)
+
+                        self.assertEqual(
+                            recovered_response.status_code,
+                            status.HTTP_200_OK,
+                        )
+
+                        returned_route = (
+                            recovered_response.data["route"]
+                            if url == self.url
+                            else recovered_response.data
+                        )
+
+                        self.assertEqual(
+                            returned_route,
+                            route_data,
+                        )
+
+                        self.assertEqual(
+                            self._routing_state(),
+                            before,
+                        )

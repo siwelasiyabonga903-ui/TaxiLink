@@ -16,41 +16,110 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
 
-  const loadCurrentUser = async () => {
-    const accessToken = localStorage.getItem(
-      "access_token"
-    );
-
-    if (!accessToken) {
-      setUser(null);
-      setLoading(false);
-      return;
-    }
-
-    try {
-      const response = await api.get(
-        "/accounts/me/"
-      );
-
-      setUser(response.data);
-    } catch {
-      setUser(null);
-
-      localStorage.removeItem(
-        "access_token"
-      );
-
-      localStorage.removeItem(
-        "refresh_token"
-      );
-    } finally {
-      setLoading(false);
-    }
-  };
-
-
   useEffect(() => {
+    let cancelled = false;
+    let retryTimer = null;
+
+    const retry = (delay) => {
+      if (cancelled) {
+        return;
+      }
+
+      retryTimer = window.setTimeout(() => {
+        retryTimer = null;
+        loadCurrentUser();
+      }, delay);
+    };
+
+    const loadCurrentUser = async () => {
+      const accessToken =
+        localStorage.getItem("access_token");
+
+      const refreshToken =
+        localStorage.getItem("refresh_token");
+
+      if (!accessToken) {
+        if (!cancelled) {
+          setUser(null);
+          setLoading(false);
+        }
+
+        return;
+      }
+
+      try {
+        const response = await api.get(
+          "/accounts/me/",
+          { timeout: 15000 }
+        );
+
+        if (cancelled) {
+          return;
+        }
+
+        if (
+          localStorage.getItem("refresh_token")
+          !== refreshToken
+        ) {
+          retry(0);
+          return;
+        }
+
+        if (!localStorage.getItem("access_token")) {
+          setUser(null);
+          setLoading(false);
+          return;
+        }
+
+        setUser(response.data);
+        setLoading(false);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        const currentAccess =
+          localStorage.getItem("access_token");
+
+        const currentRefresh =
+          localStorage.getItem("refresh_token");
+
+        // A different login or a successful refresh changed
+        // the tokens while this request was in flight.
+        if (
+          currentRefresh !== refreshToken ||
+          (currentAccess && currentAccess !== accessToken)
+        ) {
+          retry(0);
+          return;
+        }
+
+        if (
+          [401, 403].includes(error?.response?.status) ||
+          !currentAccess
+        ) {
+          localStorage.removeItem("access_token");
+          localStorage.removeItem("refresh_token");
+          setUser(null);
+          setLoading(false);
+          return;
+        }
+
+        // Keep loading the session and retry after a
+        // temporary network or server failure.
+        retry(5000);
+      }
+    };
+
     loadCurrentUser();
+
+    return () => {
+      cancelled = true;
+
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+      }
+    };
   }, []);
 
 

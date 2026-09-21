@@ -11,6 +11,11 @@ from .views import (
     RouteViewSet,
     WaitingSpotViewSet,
     RevalidateWaitingLocationView,
+    NotificationListView,
+    NotificationMarkReadView,
+    NotificationMarkAllReadView,
+    DeviceTokenRegisterView,
+    DeviceTokenDeleteView,
 )
 
 
@@ -68,5 +73,35 @@ urlpatterns = [
     "waiting-requests/revalidate-location/",
     RevalidateWaitingLocationView.as_view(),
     name="revalidate-waiting-location",
+    ),
+
+    path(
+    "notifications/",
+    NotificationListView.as_view(),
+    name="notification-list",
+    ),
+
+    path(
+        "notifications/<int:notification_id>/read/",
+        NotificationMarkReadView.as_view(),
+        name="notification-mark-read",
+    ),
+
+    path(
+        "notifications/read-all/",
+        NotificationMarkAllReadView.as_view(),
+        name="notification-mark-all-read",
+    ),
+
+    path(
+        "device-tokens/",
+        DeviceTokenRegisterView.as_view(),
+        name="device-token-register",
+    ),
+
+    path(
+        "device-tokens/<int:token_id>/",
+        DeviceTokenDeleteView.as_view(),
+        name="device-token-delete",
     ),
 ]

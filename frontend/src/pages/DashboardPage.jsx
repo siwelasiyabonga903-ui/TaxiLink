@@ -9,6 +9,7 @@ import { Link } from "react-router-dom";
 
 import api from "../api/client";
 import AppLayout from "../components/AppLayout";
+import PassengerTaxiTrackingModal from "../components/PassengerTaxiTrackingModal";
 import { useAuth } from "../context/AuthContext";
 
 
@@ -64,6 +65,7 @@ function DashboardCard({
   description,
   link,
   linkText,
+  action,
 }) {
   return (
     <article className="dashboard-card">
@@ -87,6 +89,8 @@ function DashboardCard({
           {linkText}
         </Link>
       )}
+
+      {action}
     </article>
   );
 }
@@ -137,6 +141,10 @@ export default function DashboardPage() {
   const [error, setError] =
     useState("");
 
+  const [
+    trackingOpen,
+    setTrackingOpen,
+  ] = useState(false);
 
   const isPassenger =
     user.role === "PASSENGER";
@@ -574,6 +582,24 @@ export default function DashboardPage() {
                     )
                 )
               }
+              action={
+                passengerDispatch?.status
+                  === "EN_ROUTE"
+                  && passengerDispatch?.id
+                  && passengerDispatch?.route_id
+                    ? (
+                      <button
+                        className="action-button"
+                        type="button"
+                        onClick={() =>
+                          setTrackingOpen(true)
+                        }
+                      >
+                        Track Taxi
+                      </button>
+                    )
+                    : null
+              }
             />
           </section>
         </>
@@ -786,6 +812,24 @@ export default function DashboardPage() {
           </section>
         </>
       )}
+
+
+      {trackingOpen
+        && passengerDispatch?.status
+          === "EN_ROUTE"
+        && (
+          <PassengerTaxiTrackingModal
+            dispatch={
+              passengerDispatch
+            }
+            waitingRequest={
+              waitingRequest
+            }
+            onClose={() =>
+              setTrackingOpen(false)
+            }
+          />
+        )}
     </AppLayout>
   );
 }

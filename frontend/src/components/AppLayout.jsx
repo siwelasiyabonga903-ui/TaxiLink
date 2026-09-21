@@ -1,4 +1,9 @@
 import {
+  useEffect,
+  useState,
+} from "react";
+
+import {
   NavLink,
   useNavigate,
 } from "react-router-dom";
@@ -8,6 +13,11 @@ import PassengerLocationMonitor
 
 import { useAuth } from "../context/AuthContext";
 
+import {
+  listenForForegroundNotifications,
+  registerPushNotifications,
+} from "../notifications";
+
 
 export default function AppLayout({
   children,
@@ -16,12 +26,90 @@ export default function AppLayout({
 
   const navigate = useNavigate();
 
+  const [
+    notificationState,
+    setNotificationState,
+  ] = useState("idle");
+
+
+  useEffect(() => {
+    let cancelled = false;
+    let unsubscribe = () => {};
+
+    const startListener = async () => {
+      try {
+        const stopListening =
+          await listenForForegroundNotifications();
+
+        if (cancelled) {
+          stopListening();
+          return;
+        }
+
+        unsubscribe = stopListening;
+      } catch (error) {
+        console.error(
+          "Foreground notification listener failed:",
+          error
+        );
+      }
+    };
+
+    startListener();
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [notificationState]);
+
 
   const handleLogout = async () => {
     await logout();
 
     navigate("/login");
   };
+
+
+  const handleEnableNotifications = async () => {
+    setNotificationState("loading");
+
+    try {
+      const result =
+        await registerPushNotifications();
+
+      if (result.registered) {
+        setNotificationState("enabled");
+        return;
+      }
+
+      if (
+        result.reason === "permission-denied"
+      ) {
+        setNotificationState("denied");
+        return;
+      }
+
+      setNotificationState("unavailable");
+    } catch (error) {
+      console.error(
+        "Notification registration failed:",
+        error
+      );
+
+      setNotificationState("error");
+    }
+  };
+
+
+  const notificationButtonText = {
+    idle: "Enable notifications",
+    loading: "Enabling...",
+    enabled: "Notifications enabled",
+    denied: "Notifications denied",
+    unavailable: "Notifications unavailable",
+    error: "Retry notifications",
+  }[notificationState];
 
 
   return (
@@ -59,6 +147,20 @@ export default function AppLayout({
           <NavLink to="/profile">
             Profile
           </NavLink>
+
+          <button
+            className="link-button"
+            onClick={
+              handleEnableNotifications
+            }
+            disabled={
+              notificationState === "loading"
+              || notificationState === "enabled"
+            }
+            type="button"
+          >
+            {notificationButtonText}
+          </button>
 
           <button
             className="link-button"

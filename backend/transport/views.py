@@ -4,7 +4,11 @@ from django.db.models import IntegerField, Prefetch, Q, Sum, Value
 from django.utils import timezone
 from django.db.models.functions import Coalesce
 from .services import calculate_distance_meters
+from .notification_service import create_notification
+from .routing_service import (RoutingServiceError, get_route_geojson, get_coordinates_geojson)
+from decimal import Decimal, InvalidOperation
 
+from rest_framework.permissions import IsAuthenticated
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -14,10 +18,13 @@ from .models import (
     DispatchAssignment,
     DispatchRequest,
     DriverAvailability,
+    DriverLocation,
     Route,
     Trip,
     WaitingRequest,
     WaitingSpot,
+    Notification,
+    DeviceToken,
 )
 from .permissions import (
     IsDispatcher,
@@ -35,6 +42,8 @@ from .serializers import (
     WaitingRequestSerializer,
     WaitingSpotSerializer,
     PassengerLocationRevalidationSerializer,
+    NotificationSerializer,
+    DeviceTokenSerializer,
 )
 
 
@@ -43,15 +52,28 @@ GEOFENCE_EXIT_GRACE_SECONDS = 30
 
 
 def waiting_spot_queryset():
-    return WaitingSpot.objects.select_related(
-        "route"
-    ).annotate(
+    assigned_request_ids = (
+        DispatchRequest.objects.filter(
+            dispatch__status__in=[
+                DispatchAssignment.Status.PENDING,
+                DispatchAssignment.Status.ACCEPTED,
+                DispatchAssignment.Status.EN_ROUTE,
+            ]
+        ).values("waiting_request_id")
+    )
+
+    return WaitingSpot.objects.select_related("route").annotate(
         active_waiting_count=Coalesce(
             Sum(
                 "waiting_requests__party_size",
-                filter=Q(
-                    waiting_requests__status=(
-                        WaitingRequest.Status.WAITING
+                filter=(
+                    Q(
+                        waiting_requests__status=(
+                            WaitingRequest.Status.WAITING
+                        )
+                    )
+                    & ~Q(
+                        waiting_requests__id__in=assigned_request_ids
                     )
                 ),
             ),
@@ -78,6 +100,36 @@ class RouteViewSet(viewsets.ModelViewSet):
                 "waiting_spots",
                 queryset=spots,
             )
+        )
+
+    @action(
+    detail=True,
+    methods=["get"],
+    url_path="road-route",
+    )
+    def road_route(
+        self,
+        request,
+        pk=None,
+    ):
+        route = self.get_object()
+
+        try:
+            geojson = get_route_geojson(
+                route
+            )
+
+        except RoutingServiceError as exc:
+            return Response(
+                {
+                    "detail": str(exc)
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            geojson,
+            status=status.HTTP_200_OK,
         )
 
 
@@ -184,6 +236,8 @@ class CurrentWaitingRequestView(APIView):
             assignment = dispatch_link.dispatch
 
             dispatch_data = {
+                "id": assignment.id,
+                "route_id": assignment.route_id,
                 "assigned": True,
                 "status": assignment.status,
                 "status_display": (
@@ -237,39 +291,148 @@ class CancelCurrentWaitingRequestView(APIView):
     permission_classes = [IsPassenger]
 
     def post(self, request):
-        waiting_request = (
-            WaitingRequest.objects
-            .filter(
-                passenger=request.user,
-                status=WaitingRequest.Status.WAITING,
+        with transaction.atomic():
+            waiting_request = (
+                WaitingRequest.objects
+                .select_for_update()
+                .filter(
+                    passenger=request.user,
+                    status=(
+                        WaitingRequest.Status.WAITING
+                    ),
+                )
+                .first()
             )
-            .first()
-        )
 
-        if waiting_request is None:
-            return Response(
-                {
-                    "detail": (
-                        "You do not have an active waiting request."
+            if waiting_request is None:
+                return Response(
+                    {
+                        "detail": (
+                            "You do not have an "
+                            "active waiting request."
+                        )
+                    },
+                    status=(
+                        status.HTTP_400_BAD_REQUEST
+                    ),
+                )
+
+            pending_assignment_ids = list(
+                DispatchRequest.objects
+                .filter(
+                    waiting_request=waiting_request,
+                    dispatch__status=(
+                        DispatchAssignment
+                        .Status
+                        .PENDING
+                    ),
+                )
+                .values_list(
+                    "dispatch_id",
+                    flat=True,
+                )
+            )
+
+            pending_assignments = list(
+                DispatchAssignment.objects
+                .select_for_update()
+                .filter(
+                    pk__in=pending_assignment_ids,
+                    status=(
+                        DispatchAssignment
+                        .Status
+                        .PENDING
+                    ),
+                )
+                .select_related(
+                    "driver"
+                )
+            )
+
+            waiting_request.status = (
+                WaitingRequest.Status.CANCELLED
+            )
+
+            waiting_request.ended_at = (
+                timezone.now()
+            )
+
+            waiting_request.save(
+                update_fields=[
+                    "status",
+                    "ended_at",
+                ]
+            )
+
+            for assignment in (
+                pending_assignments
+            ):
+                remaining_count = sum(
+                    dispatch_request
+                    .waiting_request
+                    .party_size
+                    for dispatch_request
+                    in (
+                        assignment
+                        .dispatch_requests
+                        .select_related(
+                            "waiting_request"
+                        )
+                        .filter(
+                            waiting_request__status=(
+                                WaitingRequest
+                                .Status
+                                .WAITING
+                            )
+                        )
                     )
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+                )
 
-        waiting_request.status = (
-            WaitingRequest.Status.CANCELLED
-        )
+                if remaining_count > 0:
+                    assignment.passenger_count = (
+                        remaining_count
+                    )
 
-        waiting_request.ended_at = (
-            timezone.now()
-        )
+                    assignment.save(
+                        update_fields=[
+                            "passenger_count",
+                        ]
+                    )
 
-        waiting_request.save(
-            update_fields=[
-                "status",
-                "ended_at",
-            ]
-        )
+                    continue
+
+                assignment.status = (
+                    DispatchAssignment
+                    .Status
+                    .CANCELLED
+                )
+
+                assignment.save(
+                    update_fields=[
+                        "status",
+                    ]
+                )
+
+                availability, _ = (
+                    DriverAvailability.objects
+                    .select_for_update()
+                    .get_or_create(
+                        driver=(
+                            assignment.driver
+                        )
+                    )
+                )
+
+                availability.is_available = (
+                    True
+                )
+
+                availability.save(
+                    update_fields=[
+                        "is_available",
+                        "updated_at",
+                    ]
+                )
 
         return Response(
             WaitingRequestSerializer(
@@ -432,6 +595,38 @@ class RevalidateWaitingLocationView(APIView):
                     }
                 )
 
+            pending_assignment_ids = list(
+                DispatchRequest.objects
+                .filter(
+                    waiting_request=waiting_request,
+                    dispatch__status=(
+                        DispatchAssignment
+                        .Status
+                        .PENDING
+                    ),
+                )
+                .values_list(
+                    "dispatch_id",
+                    flat=True,
+                )
+            )
+
+            pending_assignments = list(
+                DispatchAssignment.objects
+                .select_for_update()
+                .filter(
+                    pk__in=pending_assignment_ids,
+                    status=(
+                        DispatchAssignment
+                        .Status
+                        .PENDING
+                    ),
+                )
+                .select_related(
+                    "driver"
+                )
+            )
+
             waiting_request.status = (
                 WaitingRequest.Status.CANCELLED
             )
@@ -444,6 +639,70 @@ class RevalidateWaitingLocationView(APIView):
                     "ended_at",
                 ]
             )
+
+            for assignment in pending_assignments:
+                remaining_count = sum(
+                    dispatch_request
+                    .waiting_request
+                    .party_size
+                    for dispatch_request
+                    in (
+                        assignment
+                        .dispatch_requests
+                        .select_related(
+                            "waiting_request"
+                        )
+                        .filter(
+                            waiting_request__status=(
+                                WaitingRequest
+                                .Status
+                                .WAITING
+                            )
+                        )
+                    )
+                )
+
+                if remaining_count > 0:
+                    assignment.passenger_count = (
+                        remaining_count
+                    )
+
+                    assignment.save(
+                        update_fields=[
+                            "passenger_count",
+                        ]
+                    )
+
+                    continue
+
+                assignment.status = (
+                    DispatchAssignment
+                    .Status
+                    .CANCELLED
+                )
+
+                assignment.save(
+                    update_fields=[
+                        "status",
+                    ]
+                )
+
+                availability, _ = (
+                    DriverAvailability.objects
+                    .select_for_update()
+                    .get_or_create(
+                        driver=assignment.driver
+                    )
+                )
+
+                availability.is_available = True
+
+                availability.save(
+                    update_fields=[
+                        "is_available",
+                        "updated_at",
+                    ]
+                )
 
             return Response(
                 {
@@ -655,8 +914,663 @@ class DispatchAssignmentViewSet(
 
     @action(
         detail=True,
-        methods=["post"],
-        permission_classes=[IsDriver],
+        methods=[
+            "get",
+            "post",
+        ],
+        permission_classes=[
+            IsAuthenticated
+        ],
+        url_path="location",
+    )
+    def location(
+        self,
+        request,
+        pk=None,
+    ):
+        assignment = (
+            DispatchAssignment.objects
+            .select_related(
+                "driver",
+                "dispatcher",
+            )
+            .filter(
+                pk=pk
+            )
+            .first()
+        )
+
+        if assignment is None:
+            return Response(
+                {
+                    "detail": (
+                        "Dispatch assignment "
+                        "not found."
+                    )
+                },
+                status=(
+                    status.HTTP_404_NOT_FOUND
+                ),
+            )
+
+        if request.method == "POST":
+            if (
+                request.user.role
+                != "DRIVER"
+                or assignment.driver_id
+                != request.user.id
+            ):
+                return Response(
+                    {
+                        "detail": (
+                            "Only the assigned "
+                            "driver can update "
+                            "this location."
+                        )
+                    },
+                    status=(
+                        status.HTTP_403_FORBIDDEN
+                    ),
+                )
+
+            if (
+                assignment.status
+                != DispatchAssignment
+                .Status
+                .EN_ROUTE
+            ):
+                return Response(
+                    {
+                        "detail": (
+                            "Location can only "
+                            "be updated while "
+                            "the dispatch is "
+                            "en route."
+                        )
+                    },
+                    status=(
+                        status.HTTP_400_BAD_REQUEST
+                    ),
+                )
+
+            try:
+                latitude = Decimal(
+                    str(
+                        request.data[
+                            "latitude"
+                        ]
+                    )
+                )
+
+                longitude = Decimal(
+                    str(
+                        request.data[
+                            "longitude"
+                        ]
+                    )
+                )
+
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+                InvalidOperation,
+            ):
+                return Response(
+                    {
+                        "detail": (
+                            "Valid latitude and "
+                            "longitude are required."
+                        )
+                    },
+                    status=(
+                        status.HTTP_400_BAD_REQUEST
+                    ),
+                )
+
+            if not (
+                Decimal("-90")
+                <= latitude
+                <= Decimal("90")
+            ):
+                return Response(
+                    {
+                        "latitude": (
+                            "Latitude must be "
+                            "between -90 and 90."
+                        )
+                    },
+                    status=(
+                        status.HTTP_400_BAD_REQUEST
+                    ),
+                )
+
+            if not (
+                Decimal("-180")
+                <= longitude
+                <= Decimal("180")
+            ):
+                return Response(
+                    {
+                        "longitude": (
+                            "Longitude must be "
+                            "between -180 and 180."
+                        )
+                    },
+                    status=(
+                        status.HTTP_400_BAD_REQUEST
+                    ),
+                )
+
+            accuracy_raw = (
+                request.data.get(
+                    "accuracy_meters"
+                )
+            )
+
+            accuracy = None
+
+            if (
+                accuracy_raw
+                not in [
+                    None,
+                    "",
+                ]
+            ):
+                try:
+                    accuracy = Decimal(
+                        str(
+                            accuracy_raw
+                        )
+                    )
+
+                except (
+                    TypeError,
+                    ValueError,
+                    InvalidOperation,
+                ):
+                    return Response(
+                        {
+                            "accuracy_meters": (
+                                "Accuracy must be "
+                                "a valid number."
+                            )
+                        },
+                        status=(
+                            status
+                            .HTTP_400_BAD_REQUEST
+                        ),
+                    )
+
+                if (
+                    accuracy < 0
+                    or accuracy
+                    > Decimal(
+                        "999999.99"
+                    )
+                ):
+                    return Response(
+                        {
+                            "accuracy_meters": (
+                                "Accuracy must be "
+                                "between 0 and "
+                                "999999.99 metres."
+                            )
+                        },
+                        status=(
+                            status
+                            .HTTP_400_BAD_REQUEST
+                        ),
+                    )
+
+            driver_location, created = (
+                DriverLocation.objects
+                .update_or_create(
+                    dispatch=assignment,
+                    defaults={
+                        "latitude": latitude,
+                        "longitude": longitude,
+                        "accuracy_meters": (
+                            accuracy
+                        ),
+                    },
+                )
+            )
+
+            return Response(
+                {
+                    "available": True,
+                    "dispatch": (
+                        assignment.id
+                    ),
+                    "latitude": float(
+                        driver_location.latitude
+                    ),
+                    "longitude": float(
+                        driver_location.longitude
+                    ),
+                    "accuracy_meters": (
+                        float(
+                            driver_location
+                            .accuracy_meters
+                        )
+                        if (
+                            driver_location
+                            .accuracy_meters
+                            is not None
+                        )
+                        else None
+                    ),
+                    "updated_at": (
+                        driver_location
+                        .updated_at
+                    ),
+                },
+                status=(
+                    status.HTTP_201_CREATED
+                    if created
+                    else status.HTTP_200_OK
+                ),
+            )
+
+        authorised = False
+
+        if (
+            request.user.role
+            == "DISPATCHER"
+        ):
+            authorised = True
+
+        elif (
+            request.user.role
+            == "DRIVER"
+            and assignment.driver_id
+            == request.user.id
+        ):
+            authorised = True
+
+        elif (
+            request.user.role
+            == "PASSENGER"
+        ):
+            authorised = (
+                DispatchRequest.objects
+                .filter(
+                    dispatch=assignment,
+                    waiting_request__passenger=(
+                        request.user
+                    ),
+                    waiting_request__status=(
+                        WaitingRequest
+                        .Status
+                        .WAITING
+                    ),
+                )
+                .exists()
+            )
+
+        if not authorised:
+            return Response(
+                {
+                    "detail": (
+                        "You do not have "
+                        "permission to track "
+                        "this dispatch."
+                    )
+                },
+                status=(
+                    status.HTTP_403_FORBIDDEN
+                ),
+            )
+
+        if (
+            assignment.status
+            != DispatchAssignment
+            .Status
+            .EN_ROUTE
+        ):
+            return Response(
+                {
+                    "detail": (
+                        "Tracking is only "
+                        "available while the "
+                        "dispatch is en route."
+                    )
+                },
+                status=(
+                    status.HTTP_400_BAD_REQUEST
+                ),
+            )
+
+        driver_location = (
+            DriverLocation.objects
+            .filter(
+                dispatch=assignment
+            )
+            .first()
+        )
+
+        if driver_location is None:
+            return Response(
+                {
+                    "available": False,
+                    "dispatch": (
+                        assignment.id
+                    ),
+                    "location": None,
+                }
+            )
+
+        return Response(
+            {
+                "available": True,
+                "dispatch": (
+                    assignment.id
+                ),
+                "latitude": float(
+                    driver_location.latitude
+                ),
+                "longitude": float(
+                    driver_location.longitude
+                ),
+                "accuracy_meters": (
+                    float(
+                        driver_location
+                        .accuracy_meters
+                    )
+                    if (
+                        driver_location
+                        .accuracy_meters
+                        is not None
+                    )
+                    else None
+                ),
+                "updated_at": (
+                    driver_location
+                    .updated_at
+                ),
+            }
+        )
+
+    @action(
+        detail=True,
+        methods=["get"],
+        permission_classes=[
+            IsAuthenticated
+        ],
+        url_path="passenger-route",
+    )
+    def passenger_route(
+        self,
+        request,
+        pk=None,
+    ):
+        assignment = (
+            DispatchAssignment.objects
+            .filter(
+                pk=pk
+            )
+            .first()
+        )
+
+        if assignment is None:
+            return Response(
+                {
+                    "detail": (
+                        "Dispatch assignment "
+                        "not found."
+                    )
+                },
+                status=(
+                    status.HTTP_404_NOT_FOUND
+                ),
+            )
+
+        if (
+            request.user.role
+            != "PASSENGER"
+        ):
+            return Response(
+                {
+                    "detail": (
+                        "Only an assigned "
+                        "passenger can view "
+                        "this pickup route."
+                    )
+                },
+                status=(
+                    status.HTTP_403_FORBIDDEN
+                ),
+            )
+
+        if (
+            assignment.status
+            != DispatchAssignment
+            .Status
+            .EN_ROUTE
+        ):
+            return Response(
+                {
+                    "detail": (
+                        "Pickup route tracking "
+                        "is only available while "
+                        "the dispatch is en route."
+                    )
+                },
+                status=(
+                    status.HTTP_400_BAD_REQUEST
+                ),
+            )
+
+        passenger_link = (
+            DispatchRequest.objects
+            .select_related(
+                "waiting_request",
+                "waiting_request__waiting_spot",
+            )
+            .filter(
+                dispatch=assignment,
+                waiting_request__passenger=(
+                    request.user
+                ),
+                waiting_request__status=(
+                    WaitingRequest
+                    .Status
+                    .WAITING
+                ),
+                boarded=False,
+            )
+            .first()
+        )
+
+        if passenger_link is None:
+            return Response(
+                {
+                    "detail": (
+                        "Live pickup tracking "
+                        "is no longer available "
+                        "for this passenger."
+                    )
+                },
+                status=(
+                    status.HTTP_403_FORBIDDEN
+                ),
+            )
+
+        passenger_spot = (
+            passenger_link
+            .waiting_request
+            .waiting_spot
+        )
+
+        pickup_links = (
+            DispatchRequest.objects
+            .select_related(
+                "waiting_request",
+                "waiting_request__waiting_spot",
+            )
+            .filter(
+                dispatch=assignment,
+                boarded=False,
+                waiting_request__status=(
+                    WaitingRequest.Status.WAITING
+                ),
+                waiting_request__waiting_spot__stop_order__lte=(
+                    passenger_spot.stop_order
+                ),
+            )
+            .order_by(
+                "waiting_request__waiting_spot__stop_order",
+                "waiting_request__waiting_spot_id",
+            )
+        )
+
+        pickup_spots = []
+        seen_spot_ids = set()
+
+        for link in pickup_links:
+            spot = (
+                link
+                .waiting_request
+                .waiting_spot
+            )
+
+            if (
+                spot.id
+                in seen_spot_ids
+            ):
+                continue
+
+            seen_spot_ids.add(
+                spot.id
+            )
+
+            pickup_spots.append(
+                {
+                    "id": spot.id,
+                    "name": spot.name,
+                    "stop_order": (
+                        spot.stop_order
+                    ),
+                    "latitude": float(
+                        spot.latitude
+                    ),
+                    "longitude": float(
+                        spot.longitude
+                    ),
+                    "is_passenger_spot": (
+                        spot.id
+                        == passenger_spot.id
+                    ),
+                }
+            )
+
+        driver_location = (
+            DriverLocation.objects
+            .filter(
+                dispatch=assignment
+            )
+            .first()
+        )
+
+        if driver_location is None:
+            return Response(
+                {
+                    "available": False,
+                    "dispatch": (
+                        assignment.id
+                    ),
+                    "driver_location": None,
+                    "pickup_spots": (
+                        pickup_spots
+                    ),
+                    "route": None,
+                }
+            )
+
+        coordinates = [
+            [
+                float(
+                    driver_location
+                    .longitude
+                ),
+                float(
+                    driver_location
+                    .latitude
+                ),
+            ]
+        ]
+
+        for spot in pickup_spots:
+            coordinates.append(
+                [
+                    spot["longitude"],
+                    spot["latitude"],
+                ]
+            )
+
+        try:
+            route_geojson = (
+                get_coordinates_geojson(
+                    coordinates
+                )
+            )
+
+        except RoutingServiceError as exc:
+            return Response(
+                {
+                    "detail": str(exc)
+                },
+                status=(
+                    status.HTTP_400_BAD_REQUEST
+                ),
+            )
+
+        return Response(
+            {
+                "available": True,
+                "dispatch": (
+                    assignment.id
+                ),
+                "driver_location": {
+                    "latitude": float(
+                        driver_location
+                        .latitude
+                    ),
+                    "longitude": float(
+                        driver_location
+                        .longitude
+                    ),
+                    "accuracy_meters": (
+                        float(
+                            driver_location
+                            .accuracy_meters
+                        )
+                        if (
+                            driver_location
+                            .accuracy_meters
+                            is not None
+                        )
+                        else None
+                    ),
+                    "updated_at": (
+                        driver_location
+                        .updated_at
+                    ),
+                },
+                "pickup_spots": (
+                    pickup_spots
+                ),
+                "route": (
+                    route_geojson
+                ),
+            }
+        )
+
+    @action(
+    detail=True,
+    methods=["post"],
+    permission_classes=[IsDriver],
     )
     def accept(
         self,
@@ -698,6 +1612,60 @@ class DispatchAssignmentViewSet(
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+            waiting_passengers_exist = (
+                DispatchRequest.objects
+                .filter(
+                    dispatch=assignment,
+                    waiting_request__status=(
+                        WaitingRequest.Status.WAITING
+                    ),
+                )
+                .exists()
+            )
+
+            if not waiting_passengers_exist:
+                now = timezone.now()
+
+                assignment.status = (
+                    DispatchAssignment.Status.CANCELLED
+                )
+
+                assignment.responded_at = now
+
+                assignment.save(
+                    update_fields=[
+                        "status",
+                        "responded_at",
+                    ]
+                )
+
+                availability, _ = (
+                    DriverAvailability.objects
+                    .select_for_update()
+                    .get_or_create(
+                        driver=request.user
+                    )
+                )
+
+                availability.is_available = True
+
+                availability.save(
+                    update_fields=[
+                        "is_available",
+                        "updated_at",
+                    ]
+                )
+
+                return Response(
+                    {
+                        "detail": (
+                            "This dispatch was cancelled because "
+                            "no assigned passengers are still waiting."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
             now = timezone.now()
 
             trip, _ = (
@@ -721,6 +1689,44 @@ class DispatchAssignmentViewSet(
             )
 
             trip.en_route_at = now
+
+            waiting_passengers = (
+                User.objects
+                .filter(
+                    waiting_requests__dispatch_requests__dispatch=assignment,
+                    waiting_requests__status=(
+                        WaitingRequest.Status.WAITING
+                    ),
+                )
+                .distinct()
+            )
+
+            for passenger in waiting_passengers:
+                create_notification(
+                    recipient=passenger,
+                    notification_type=(
+                        Notification.Type.DISPATCH_ACCEPTED
+                    ),
+                    title="Taxi on the way",
+                    message=(
+                        "Your assigned driver accepted the dispatch "
+                        "and is on the way."
+                    ),
+                    dispatch=assignment,
+                )
+
+            create_notification(
+                recipient=assignment.dispatcher,
+                notification_type=(
+                    Notification.Type.DISPATCH_ACCEPTED
+                ),
+                title="Dispatch accepted",
+                message=(
+                    f"{assignment.driver.username} accepted "
+                    f"the dispatch for {assignment.route.name}."
+                ),
+                dispatch=assignment,
+            )
 
             trip.save(
                 update_fields=[
@@ -1126,6 +2132,65 @@ class DispatchAssignmentViewSet(
                 DispatchAssignment.Status.CANCELLED
             )
 
+            waiting_passengers = (
+                User.objects
+                .filter(
+                    waiting_requests__dispatch_requests__dispatch=assignment,
+                    waiting_requests__status=(
+                        WaitingRequest.Status.WAITING
+                    ),
+                )
+                .distinct()
+            )
+
+            for passenger in waiting_passengers:
+                create_notification(
+                    recipient=passenger,
+                    notification_type=(
+                        Notification.Type.DISPATCH_CANCELLED
+                    ),
+                    title="Taxi assignment cancelled",
+                    message=(
+                        "Your taxi assignment was cancelled. "
+                        "You are still waiting for another taxi."
+                    ),
+                    dispatch=assignment,
+                )
+
+            destination = (
+                assignment.route.name
+                if assignment.route
+                else assignment.waiting_spot.name
+                if assignment.waiting_spot
+                else "assigned route"
+            )
+
+            create_notification(
+                recipient=assignment.driver,
+                notification_type=(
+                    Notification.Type.DISPATCH_CANCELLED
+                ),
+                title="Dispatch cancelled",
+                message=(
+                    f"The dispatcher cancelled your dispatch "
+                    f"for {destination}."
+                ),
+                dispatch=assignment,
+            )
+
+            create_notification(
+                recipient=assignment.dispatcher,
+                notification_type=(
+                    Notification.Type.DISPATCH_CANCELLED
+                ),
+                title="Dispatch cancelled",
+                message=(
+                    f"The dispatch for {destination} "
+                    f"was cancelled."
+                ),
+                dispatch=assignment,
+            )
+
             assignment.save(
                 update_fields=[
                     "status",
@@ -1357,9 +2422,7 @@ class DispatchAssignmentViewSet(
                 )
             )
 
-            availability.is_available = (
-                True
-            )
+            availability.is_available = True
 
             availability.save(
                 update_fields=[
@@ -1368,8 +2431,279 @@ class DispatchAssignmentViewSet(
                 ]
             )
 
+            waiting_passengers = (
+                User.objects
+                .filter(
+                    waiting_requests__dispatch_requests__dispatch=assignment,
+                    waiting_requests__status=(
+                        WaitingRequest.Status.WAITING
+                    ),
+                )
+                .distinct()
+            )
+
+            for passenger in waiting_passengers:
+                create_notification(
+                    recipient=passenger,
+                    notification_type=(
+                        Notification.Type.DISPATCH_REJECTED
+                    ),
+                    title="Taxi assignment changed",
+                    message=(
+                        "The assigned driver declined the dispatch. "
+                        "You are still waiting for another taxi."
+                    ),
+                    dispatch=assignment,
+                )
+
+            destination = (
+                assignment.route.name
+                if assignment.route
+                else assignment.waiting_spot.name
+                if assignment.waiting_spot
+                else "assigned route"
+            )
+
+            create_notification(
+                recipient=assignment.dispatcher,
+                notification_type=(
+                    Notification.Type.DISPATCH_REJECTED
+                ),
+                title="Dispatch rejected",
+                message=(
+                    f"{assignment.driver.username} rejected "
+                    f"the dispatch for {destination}."
+                ),
+                dispatch=assignment,
+            )
+
         return Response(
             DispatchAssignmentSerializer(
                 assignment
             ).data
+        )
+
+class NotificationListView(APIView):
+    permission_classes = [
+        IsAuthenticated
+    ]
+
+    def get(self, request):
+        notifications = (
+            Notification.objects
+            .filter(
+                recipient=request.user
+            )
+            .select_related(
+                "dispatch"
+            )
+        )
+
+        return Response(
+            NotificationSerializer(
+                notifications,
+                many=True,
+            ).data
+        )
+
+
+class NotificationMarkReadView(APIView):
+    permission_classes = [
+        IsAuthenticated
+    ]
+
+    def post(
+        self,
+        request,
+        notification_id,
+    ):
+        notification = (
+            Notification.objects
+            .filter(
+                id=notification_id,
+                recipient=request.user,
+            )
+            .first()
+        )
+
+        if notification is None:
+            return Response(
+                {
+                    "detail": (
+                        "Notification not found."
+                    )
+                },
+                status=(
+                    status.HTTP_404_NOT_FOUND
+                ),
+            )
+
+        if not notification.is_read:
+            notification.is_read = True
+
+            notification.save(
+                update_fields=[
+                    "is_read",
+                ]
+            )
+
+        return Response(
+            NotificationSerializer(
+                notification
+            ).data
+        )
+
+
+class NotificationMarkAllReadView(
+    APIView
+):
+    permission_classes = [
+        IsAuthenticated
+    ]
+
+    def post(self, request):
+        marked_read = (
+            Notification.objects
+            .filter(
+                recipient=request.user,
+                is_read=False,
+            )
+            .update(
+                is_read=True
+            )
+        )
+
+        return Response(
+            {
+                "marked_read": (
+                    marked_read
+                )
+            }
+        )
+
+
+class DeviceTokenRegisterView(APIView):
+    permission_classes = [
+        IsAuthenticated
+    ]
+
+    def post(self, request):
+        serializer = DeviceTokenSerializer(
+            data=request.data
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        token = (
+            serializer.validated_data[
+                "token"
+            ]
+        )
+
+        platform = (
+            serializer.validated_data[
+                "platform"
+            ]
+        )
+
+        existing_token = (
+            DeviceToken.objects
+            .filter(
+                token=token
+            )
+            .first()
+        )
+
+        created = (
+            existing_token is None
+        )
+
+        if existing_token:
+            existing_token.user = (
+                request.user
+            )
+
+            existing_token.platform = (
+                platform
+            )
+
+            existing_token.is_active = True
+
+            existing_token.save(
+                update_fields=[
+                    "user",
+                    "platform",
+                    "is_active",
+                    "updated_at",
+                ]
+            )
+
+            device_token = (
+                existing_token
+            )
+
+        else:
+            device_token = (
+                DeviceToken.objects.create(
+                    user=request.user,
+                    token=token,
+                    platform=platform,
+                )
+            )
+
+        return Response(
+            {
+                "id": device_token.id,
+                "platform": (
+                    device_token.platform
+                ),
+                "is_active": (
+                    device_token.is_active
+                ),
+            },
+            status=(
+                status.HTTP_201_CREATED
+                if created
+                else status.HTTP_200_OK
+            ),
+        )
+
+
+class DeviceTokenDeleteView(APIView):
+    permission_classes = [
+        IsAuthenticated
+    ]
+
+    def delete(
+        self,
+        request,
+        token_id,
+    ):
+        device_token = (
+            DeviceToken.objects
+            .filter(
+                id=token_id,
+                user=request.user,
+            )
+            .first()
+        )
+
+        if device_token is None:
+            return Response(
+                {
+                    "detail": (
+                        "Device token not found."
+                    )
+                },
+                status=(
+                    status.HTTP_404_NOT_FOUND
+                ),
+            )
+
+        device_token.delete()
+
+        return Response(
+            status=status.HTTP_204_NO_CONTENT
         )

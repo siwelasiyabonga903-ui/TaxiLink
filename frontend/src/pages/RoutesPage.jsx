@@ -9,6 +9,7 @@ import { divIcon } from "leaflet";
 import {
   Circle,
   CircleMarker,
+  GeoJSON,
   MapContainer,
   Marker,
   Popup,
@@ -18,6 +19,7 @@ import {
 } from "react-leaflet";
 
 import "leaflet/dist/leaflet.css";
+import { createPortal } from "react-dom";
 
 import api from "../api/client";
 import AppLayout from "../components/AppLayout";
@@ -241,6 +243,10 @@ export default function RoutesPage() {
     setDispatcherLocation,
   ] = useState(null);
 
+  const [
+  routeRoadGeoJson,
+  setRouteRoadGeoJson,
+  ] = useState(null);
 
   const [loading, setLoading] =
     useState(true);
@@ -468,6 +474,8 @@ export default function RoutesPage() {
       route
     );
 
+    loadRoadRoute(route);
+
     setSpotForm({
       ...initialSpotForm,
       route: route.id,
@@ -526,6 +534,38 @@ export default function RoutesPage() {
     }
   };
 
+  const loadRoadRoute = async (
+  route
+) => {
+  setRouteRoadGeoJson(null);
+
+  const activeSpots = (
+    route.waiting_spots || []
+  ).filter(
+    (spot) => spot.is_active
+  );
+
+  if (activeSpots.length < 2) {
+    return;
+  }
+
+  try {
+    const response = await api.get(
+      `/transport/routes/${route.id}/road-route/`
+    );
+
+    setRouteRoadGeoJson(
+      response.data
+    );
+  } catch (requestError) {
+    console.error(
+      "Road route could not be loaded:",
+      requestError
+    );
+
+    setRouteRoadGeoJson(null);
+  }
+};
 
   const closeWaitingSpot = () => {
     if (locatingDispatcher) {
@@ -533,6 +573,10 @@ export default function RoutesPage() {
     }
 
     setSelectedRouteForSpot(
+      null
+    );
+
+    setRouteRoadGeoJson(
       null
     );
 
@@ -885,7 +929,11 @@ export default function RoutesPage() {
         ]
       : null;
 
-
+  const modalIsOpen = Boolean(
+    createRouteOpen
+    || selectedRouteForSpot
+    || selectedSpotForCheckIn
+  );
   return (
     <AppLayout>
       <section className="page-heading">
@@ -908,9 +956,30 @@ export default function RoutesPage() {
 
 
       {error && (
-        <div className="error-message">
-          {error}
-        </div>
+        modalIsOpen ? createPortal(
+          <div
+            className="error-message"
+            role="alert"
+            style={{
+              position: "fixed",
+              top: 16,
+              left: "50%",
+              transform: "translateX(-50%)",
+              width: "min(600px, calc(100vw - 32px))",
+              maxHeight: "40vh",
+              overflowY: "auto",
+              boxSizing: "border-box",
+              zIndex: 2147483647,
+            }}
+          >
+            {error}
+          </div>,
+          document.body
+        ) : (
+          <div className="error-message" role="alert">
+            {error}
+          </div>
+        )
       )}
 
 
@@ -1565,6 +1634,16 @@ export default function RoutesPage() {
                   }
                 />
 
+                  {routeRoadGeoJson && (
+                    <GeoJSON
+                      key={
+                        `road-route-${selectedRouteForSpot.id}`
+                      }
+                      data={
+                        routeRoadGeoJson
+                      }
+                    />
+                  )}
 
                 {selectedRouteForSpot
                   .waiting_spots

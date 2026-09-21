@@ -1,6 +1,6 @@
 from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models
+from django.db import models, transaction
 
 
 class Route(models.Model):
@@ -24,6 +24,12 @@ class WaitingSpot(models.Model):
         related_name="waiting_spots",
     )
     name = models.CharField(max_length=100)
+
+    stop_order = models.PositiveIntegerField(
+    validators=[
+        MinValueValidator(1),
+    ],
+)
 
     latitude = models.DecimalField(
         max_digits=9,
@@ -55,13 +61,85 @@ class WaitingSpot(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ["route__name", "name"]
+        ordering = [
+            "route__name",
+            "stop_order",
+            "name",
+        ]
+
         constraints = [
             models.UniqueConstraint(
-                fields=["route", "name"],
-                name="unique_waiting_spot_per_route",
-            )
+                fields=[
+                    "route",
+                    "name",
+                ],
+                name=(
+                    "unique_waiting_spot_per_route"
+                ),
+            ),
+
+            models.UniqueConstraint(
+                fields=[
+                    "route",
+                    "stop_order",
+                ],
+                name=(
+                    "unique_waiting_spot_order_per_route"
+                ),
+            ),
         ]
+
+    def save(
+        self,
+        *args,
+        **kwargs,
+    ):
+        if (
+            self.stop_order is None
+            and self.route_id
+        ):
+            using = (
+                kwargs.get("using")
+                or self._state.db
+                or "default"
+            )
+
+            with transaction.atomic(
+                using=using
+            ):
+                Route.objects.using(
+                    using
+                ).select_for_update().get(
+                    pk=self.route_id
+                )
+
+                max_order = (
+                    WaitingSpot.objects
+                    .using(using)
+                    .filter(
+                        route_id=self.route_id
+                    )
+                    .aggregate(
+                        max_order=models.Max(
+                            "stop_order"
+                        )
+                    )["max_order"]
+                    or 0
+                )
+
+                self.stop_order = (
+                    max_order + 1
+                )
+
+                return super().save(
+                    *args,
+                    **kwargs,
+                )
+
+        return super().save(
+            *args,
+            **kwargs,
+        )
 
     def __str__(self):
         return f"{self.name} — {self.route.name}"
@@ -330,3 +408,159 @@ class Trip(models.Model):
 
     def __str__(self):
         return f"Trip for Dispatch {self.dispatch_id}"
+
+class Notification(models.Model):
+    class Type(models.TextChoices):
+        NEW_DISPATCH = (
+            "NEW_DISPATCH",
+            "New dispatch",
+        )
+        DISPATCH_ACCEPTED = (
+            "DISPATCH_ACCEPTED",
+            "Dispatch accepted",
+        )
+        DISPATCH_REJECTED = (
+            "DISPATCH_REJECTED",
+            "Dispatch rejected",
+        )
+        DISPATCH_CANCELLED = (
+            "DISPATCH_CANCELLED",
+            "Dispatch cancelled",
+        )
+        DISPATCH_REASSIGNED = (
+            "DISPATCH_REASSIGNED",
+            "Dispatch reassigned",
+        )
+
+    recipient = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="notifications",
+    )
+
+    notification_type = models.CharField(
+        max_length=30,
+        choices=Type.choices,
+    )
+
+    title = models.CharField(
+        max_length=120,
+    )
+
+    message = models.CharField(
+        max_length=300,
+    )
+
+    dispatch = models.ForeignKey(
+        DispatchAssignment,
+        on_delete=models.SET_NULL,
+        related_name="notifications",
+        null=True,
+        blank=True,
+    )
+
+    is_read = models.BooleanField(
+        default=False,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        ordering = [
+            "-created_at",
+            "-id",
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.recipient.username} — "
+            f"{self.get_notification_type_display()}"
+        )
+
+
+class DeviceToken(models.Model):
+    class Platform(models.TextChoices):
+        WEB = "WEB", "Web"
+        ANDROID = "ANDROID", "Android"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="device_tokens",
+    )
+
+    token = models.TextField(
+        unique=True,
+    )
+
+    platform = models.CharField(
+        max_length=20,
+        choices=Platform.choices,
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        ordering = [
+            "-updated_at",
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.user.username} — "
+            f"{self.get_platform_display()}"
+        )
+
+class DriverLocation(models.Model):
+    dispatch = models.OneToOneField(
+        DispatchAssignment,
+        on_delete=models.CASCADE,
+        related_name="driver_location",
+    )
+
+    latitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        validators=[
+            MinValueValidator(-90),
+            MaxValueValidator(90),
+        ],
+    )
+
+    longitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        validators=[
+            MinValueValidator(-180),
+            MaxValueValidator(180),
+        ],
+    )
+
+    accuracy_meters = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    def __str__(self):
+        return (
+            f"Dispatch {self.dispatch_id} "
+            f"location"
+        )
