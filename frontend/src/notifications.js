@@ -11,14 +11,24 @@ import {
 } from "./firebase";
 
 
-export async function registerPushNotifications() {
+let registrationInFlight = null;
+
+
+async function performRegistration() {
   if (
-    !("Notification" in window) ||
-    !("serviceWorker" in navigator)
+    !("Notification" in window)
+    || !("serviceWorker" in navigator)
   ) {
     return {
       registered: false,
       reason: "unsupported",
+    };
+  }
+
+  if (!firebaseVapidKey) {
+    return {
+      registered: false,
+      reason: "configuration-missing",
     };
   }
 
@@ -76,11 +86,37 @@ export async function registerPushNotifications() {
 }
 
 
+export function registerPushNotifications() {
+  if (registrationInFlight) {
+    return registrationInFlight;
+  }
+
+  const currentAttempt =
+    performRegistration();
+
+  const trackedAttempt =
+    currentAttempt.finally(
+      () => {
+        if (
+          registrationInFlight
+          === trackedAttempt
+        ) {
+          registrationInFlight = null;
+        }
+      }
+    );
+
+  registrationInFlight = trackedAttempt;
+
+  return trackedAttempt;
+}
+
+
 export async function listenForForegroundNotifications() {
   if (
-    !("Notification" in window) ||
-    !("serviceWorker" in navigator) ||
-    Notification.permission !== "granted"
+    !("Notification" in window)
+    || !("serviceWorker" in navigator)
+    || Notification.permission !== "granted"
   ) {
     return () => {};
   }
@@ -103,7 +139,9 @@ export async function listenForForegroundNotifications() {
         body:
           payload.notification?.body
           || "You have a new notification.",
-        data: payload.data || {},
+
+        data:
+          payload.data || {},
       };
 
       const registration =
