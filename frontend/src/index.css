@@ -21,7 +21,7 @@ button {
 }
 
 a {
-  color: #166534;
+  color: #10264f;
 }
 
 .auth-page {
@@ -65,7 +65,7 @@ a {
   padding: 12px 18px;
   border: 0;
   border-radius: 7px;
-  background: #166534;
+  background: #10264f;
   color: white;
   font-weight: 700;
 }
@@ -94,8 +94,8 @@ a {
 }
 
 .success-message {
-  background: #dcfce7;
-  color: #166534;
+  background: #eaf2ff;
+  color: #10264f;
 }
 
 .topbar {
@@ -104,7 +104,7 @@ a {
   align-items: center;
   gap: 20px;
   padding: 18px 5%;
-  background: #14532d;
+  background: #10264f;
   color: white;
 }
 
@@ -164,7 +164,7 @@ a {
 
   background: #ffffff;
   border-radius: 14px;
-  border-left: 5px solid #15803d;
+  border-left: 5px solid #10264f;
 }
 
 @media (max-width: 800px) {
@@ -239,7 +239,7 @@ a {
   padding: 11px;
   border: 0;
   border-radius: 7px;
-  background: #166534;
+  background: #10264f;
   color: white;
   font-weight: 700;
 }
@@ -293,8 +293,8 @@ a {
 }
 
 .status-badge.active {
-  background: #dcfce7;
-  color: #166534;
+  background: #eaf2ff;
+  color: #10264f;
 }
 
 .status-badge.inactive {
@@ -304,10 +304,10 @@ a {
 
 .secondary-button {
   padding: 7px 10px;
-  border: 1px solid #166534;
+  border: 1px solid #10264f;
   border-radius: 6px;
   background: white;
-  color: #166534;
+  color: #10264f;
 }
 
 @media (max-width: 750px) {
@@ -329,7 +329,7 @@ a {
   margin-bottom: 26px;
   padding: 22px;
   background: white;
-  border-left: 5px solid #166534;
+  border-left: 5px solid #10264f;
   border-radius: 10px;
 }
 
@@ -364,7 +364,7 @@ a {
 }
 
 .action-button {
-  background: #166534;
+  background: #10264f;
 }
 
 .danger-button {
@@ -483,8 +483,8 @@ a {
 }
 
 .dispatch-status.accepted {
-  background: #dcfce7;
-  color: #166534;
+  background: #eaf2ff;
+  color: #10264f;
 }
 
 .dispatch-status.rejected,
@@ -658,4 +658,514 @@ a {
 
 .driver-modal {
   width: min(100%, 620px);
+}
+
+.login-page {
+  min-height: 100vh;
+  min-height: 100svh;
+  place-items: center end;
+  padding: clamp(20px, 5vw, 72px);
+  background-color: #183856;
+  background-image: linear-gradient(
+      90deg,
+      rgba(10, 30, 59, 0.08),
+      rgba(10, 30, 59, 0.58)
+    ),
+    url("/images/taxilink-background.jpg");
+  background-position: center 60%;
+  background-size: cover;
+}
+
+.login-page .auth-card {
+  display: grid;
+  gap: 14px;
+  width: min(100%, 460px);
+  padding: clamp(26px, 4vw, 42px);
+  border-radius: 20px;
+  box-shadow: 0 24px 70px rgba(7, 25, 51, 0.25);
+}
+
+.login-page .auth-card h1 {
+  margin: 0;
+  color: #12345e;
+  font-size: clamp(30px, 4vw, 38px);
+}
+
+.login-page .auth-card > p {
+  margin: 0;
+  color: #526279;
+  line-height: 1.5;
+}
+
+.login-page .auth-card > input {
+  min-height: 48px;
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 16px;
+}
+
+.login-page .auth-card > button {
+  min-height: 48px;
+  margin-top: 4px;
+  border-radius: 10px;
+  background: #2463eb;
+}
+
+.login-page .auth-card > button:hover:not(:disabled) {
+  background: #164cc4;
+}
+
+.login-page .auth-card a {
+  color: #164cc4;
+}
+
+@media (max-width: 700px) {
+  .login-page {
+    place-items: center;
+    padding: 20px 16px;
+    background-position: 46% center;
+  }
+}
+
+.topbar {
+  background: #10264f;
+}
+
+.topbar-heading {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.topbar-heading > div {
+  min-width: 0;
+}
+
+.topbar-back {
+  flex: none;
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid #7589ab;
+  border-radius: 9px;
+  color: white;
+  background: transparent;
+  font-weight: 600;
+}
+
+.topbar-back:hover {
+  background: #244474;
+}
+
+.topbar nav {
+  flex-wrap: wrap;
+}
+
+/* Desktop sidebar; phone navigation stays as it is for now. */
+@media (min-width: 901px) {
+  .app-shell {
+    padding-left: 252px;
+  }
+
+  .app-shell .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    min-height: 72px;
+    justify-content: flex-start;
+    padding: 12px 32px;
+    border-bottom: 1px solid #e1e8f3;
+    color: #10264f;
+    background: white;
+  }
+
+  .app-shell .topbar small {
+    color: #64748b;
+  }
+
+  .app-shell .topbar-back {
+    color: #10264f;
+    border-color: #d6e1f1;
+  }
+
+  .app-shell .topbar-back:hover {
+    background: #edf3ff;
+  }
+
+  .app-shell .topbar nav {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: 252px;
+    height: 100vh;
+    height: 100dvh;
+    display: flex;
+    align-items: stretch;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    gap: 6px;
+    padding: 30px 16px 18px;
+    overflow-y: auto;
+    background: #10264f;
+  }
+
+  .app-shell .topbar nav::before {
+    content: "TaxiLink";
+    padding: 0 12px 26px;
+    color: white;
+    font-size: 24px;
+    font-weight: 700;
+  }
+
+  .app-shell .topbar nav a,
+  .app-shell .topbar nav .link-button {
+    display: flex;
+    align-items: center;
+    min-height: 46px;
+    padding: 12px 14px;
+    border: 0;
+    border-radius: 9px;
+    color: #cfdbef;
+    background: transparent;
+    text-align: left;
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .app-shell .topbar nav a:hover,
+  .app-shell .topbar nav .link-button:hover {
+    background: #213d6c;
+    color: white;
+  }
+
+  .app-shell .topbar nav a.active {
+    background: #2050aa;
+    color: white;
+  }
+
+  .app-shell .topbar nav .link-button {
+    margin-top: auto;
+  }
+}
+/* The sidebar now has its own real brand in the navigation. */
+.app-shell .topbar nav::before { display: none; }
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 52px;
+  margin-bottom: 24px;
+  padding: 0 10px;
+  color: white;
+  font-size: 23px;
+}
+.sidebar-toggle, .sidebar-close, .sidebar-scrim { display: none; }
+
+@media (max-width: 900px) {
+  .app-shell .topbar {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    min-height: 72px;
+    padding: 12px 16px;
+    background: white;
+    color: #10264f;
+  }
+  .app-shell .topbar small { color: #64748b; }
+  .app-shell .topbar-back { color: #10264f; border-color: #d6e1f1; }
+  .app-shell .topbar-back:hover { background: #edf3ff; }
+  .sidebar-toggle, .sidebar-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 44px;
+    min-height: 44px;
+    padding: 8px;
+    border: 1px solid #d6e1f1;
+    border-radius: 9px;
+    background: white;
+    color: #10264f;
+    font-size: 24px;
+  }
+  .sidebar-close { border-color: #6079a1; color: white; background: transparent; }
+  .sidebar-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    width: 100%;
+    border: 0;
+    background: rgba(10, 26, 53, 0.55);
+  }
+  .app-shell .topbar nav {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 101;
+    width: min(290px, calc(100vw - 48px));
+    height: 100vh;
+    height: 100dvh;
+    display: flex;
+    align-items: stretch;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    gap: 6px;
+    padding: 24px 16px 18px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: #10264f;
+    visibility: hidden;
+    transform: translateX(-100%);
+    transition: transform 200ms ease;
+  }
+  .app-shell .topbar nav.is-open { visibility: visible; transform: translateX(0); }
+  .app-shell .topbar nav a,
+  .app-shell .topbar nav .link-button {
+    display: flex;
+    align-items: center;
+    min-height: 46px;
+    padding: 12px 14px;
+    border: 0;
+    border-radius: 9px;
+    color: #cfdbef;
+    background: transparent;
+    text-align: left;
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .app-shell .topbar nav a:hover,
+  .app-shell .topbar nav .link-button:hover { background: #213d6c; color: white; }
+  .app-shell .topbar nav a.active { background: #2463eb; color: white; }
+  .app-shell .topbar nav .link-button { margin-top: auto; }
+}
+@media (max-width: 560px) {
+  .app-shell .topbar h1 { font-size: 20px; }
+  .app-shell .topbar-heading { gap: 8px; }
+  .app-shell .topbar-heading small { display: none; }
+  .app-shell .topbar-back { padding: 8px 10px; }
+}
+
+/* Blue dashboard and controls */
+.app-shell .dashboard-card {
+  min-width: 0;
+  border: 1px solid #e2e8f2;
+  border-left: 5px solid #10264f;
+  box-shadow: 0 6px 24px rgba(16, 38, 79, 0.06);
+}
+
+.app-shell .dashboard-card h3 {
+  margin: 0;
+  color: #10264f;
+}
+
+.app-shell .dashboard-value {
+  margin-top: 12px;
+  color: #10264f;
+  font-size: clamp(30px, 4vw, 42px);
+  font-weight: 750;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.app-shell .dashboard-card p {
+  margin: 12px 0 22px;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.app-shell .action-button,
+.app-shell .form-card button:not(.danger-button):not(.secondary-button),
+.app-shell .profile-card button:not(.danger-button):not(.secondary-button),
+.auth-page .auth-card button {
+  background: #10264f;
+}
+
+.app-shell .action-button:hover:not(:disabled),
+.app-shell .form-card button:not(.danger-button):not(.secondary-button):hover:not(:disabled),
+.app-shell .profile-card button:not(.danger-button):not(.secondary-button):hover:not(:disabled) {
+  background: #10264f;
+}
+
+.app-shell .action-button:disabled {
+  background: #94a3b8;
+}
+
+.app-shell a.action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  border-radius: 9px;
+  color: white;
+  text-decoration: none;
+}
+
+.app-shell button.action-button {
+  min-height: 44px;
+  border-radius: 9px;
+}
+
+.app-shell .current-waiting-card {
+  border-left-color: #10264f;
+}
+
+.app-shell .secondary-button {
+  border-color: #10264f;
+  color: #10264f;
+}
+
+.app-shell .topbar,
+.app-shell .user-summary {
+  background: #10264f;
+  color: #fff;
+}
+
+.app-shell .topbar {
+  border-bottom-color: #10264f;
+}
+
+.app-shell .topbar h1 {
+  color: #fff;
+}
+
+.app-shell .topbar small {
+  color: #e7efff;
+}
+
+@media (max-width: 900px) {
+  .app-shell .sidebar-toggle {
+    background: transparent;
+    color: #fff;
+    border-color: #a9c2ff;
+  }
+}
+
+.dashboard-return-row {
+  margin: 0 0 20px;
+}
+
+.dashboard-return {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 1px solid #cbd8ee;
+  border-radius: 10px;
+  background: white;
+  color: #12345e;
+  font-weight: 650;
+}
+
+.dashboard-return:hover {
+  background: #edf3ff;
+}
+
+.login-page .login-intro {
+  display: none;
+}
+
+@media (min-width: 901px) {
+  .login-page {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 460px);
+    column-gap: clamp(24px, 5vw, 100px);
+  }
+
+  .login-page .login-intro {
+    display: block;
+    justify-self: center;
+    max-width: 430px;
+    color: white;
+    text-shadow: 0 2px 16px rgba(8, 22, 43, .45);
+  }
+
+  .login-page .login-intro-tag {
+    display: inline-block;
+    margin-bottom: 16px;
+    padding: 7px 12px;
+    border: 1px solid rgba(255, 255, 255, .65);
+    border-radius: 100px;
+    font-size: 12px;
+    letter-spacing: .12em;
+    font-weight: 700;
+  }
+
+  .login-page .login-intro h2 {
+    margin: 0 0 14px;
+    font-size: clamp(30px, 3.5vw, 52px);
+    line-height: 1.1;
+  }
+
+  .login-page .login-intro p {
+    margin: 0;
+    font-size: clamp(17px, 1.6vw, 20px);
+    line-height: 1.5;
+  }
+}
+
+.login-page .auth-card {
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  -webkit-backdrop-filter: blur(1px);
+  backdrop-filter: blur(1px);
+}
+
+@media (min-width: 901px) {
+  .login-page .login-intro {
+    transform: translateX(clamp(12px, 2vw, 32px));
+  }
+}
+
+@media (max-width: 900px) {
+  .login-page {
+    grid-template-columns: minmax(0, 1fr);
+    align-content: center;
+    justify-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+  }
+
+  .login-page .login-intro {
+    display: block;
+    width: min(100%, 460px);
+    color: white;
+    text-align: center;
+    text-shadow: 0 2px 12px rgba(8, 22, 43, 0.55);
+  }
+
+  .login-page .login-intro-tag {
+    display: none;
+  }
+
+  .login-page .login-intro h2 {
+    margin: 0 0 6px;
+    font-size: clamp(20px, 5vw, 26px);
+    line-height: 1.15;
+  }
+
+  .login-page .login-intro p {
+    margin: 0;
+    font-size: clamp(12px, 3.5vw, 15px);
+    line-height: 1.3;
+  }
+
+  .login-page .auth-card {
+    padding: 16px;
+    gap: 9px;
+  }
+
+  .login-page .auth-card h1 {
+    font-size: 28px;
+  }
+
+  .login-page .auth-card > input,
+  .login-page .auth-card > button {
+    min-height: 44px;
+  }
+}
+
+.app-shell .profile-card {
+  margin-bottom: 24px;
 }

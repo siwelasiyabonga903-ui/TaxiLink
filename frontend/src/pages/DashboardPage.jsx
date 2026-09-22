@@ -85,6 +85,7 @@ function DashboardCard({
         <Link
           className="action-button"
           to={link}
+          state={{ fromDashboard: true }}
         >
           {linkText}
         </Link>

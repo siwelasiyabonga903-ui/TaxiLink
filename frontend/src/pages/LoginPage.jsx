@@ -63,7 +63,16 @@ export default function LoginPage() {
 
 
   return (
-    <div className="auth-page">
+    
+    <div className="auth-page login-page">
+      <aside className="login-intro" aria-label="About TaxiLink">
+        <span className="login-intro-tag">SMART TAXI DISPATCH</span>
+        <h2>Every ride starts with a connection.</h2>
+        <p>
+          Passengers, drivers, and dispatchers in sync,
+          from check-in to pickup.
+        </p>
+      </aside>
       <form
         className="auth-card"
         onSubmit={handleSubmit}

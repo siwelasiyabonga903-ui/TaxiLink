@@ -1,10 +1,12 @@
 import {
   useEffect,
+  useRef,
   useState,
 } from "react";
 
 import {
   NavLink,
+  useLocation,
   useNavigate,
 } from "react-router-dom";
 
@@ -28,6 +30,10 @@ export default function AppLayout({
   const { user, logout } = useAuth();
 
   const navigate = useNavigate();
+  const location = useLocation();
+  const menuButtonRef = useRef(null);
+  const sidebarRef = useRef(null);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const [
     notificationState,
@@ -227,26 +233,126 @@ export default function AppLayout({
     };
   }, [notificationState]);
 
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    const closeOnWideScreen = () => {
+      if (window.innerWidth > 900) setMenuOpen(false);
+    };
+    window.addEventListener("resize", closeOnWideScreen);
+    return () => window.removeEventListener("resize", closeOnWideScreen);
+  }, []);
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const priorOverflow = document.body.style.overflow;
+    const trigger = menuButtonRef.current;
+    document.body.style.overflow = "hidden";
+    sidebarRef.current?.querySelector(".sidebar-close")?.focus();
+
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMenuOpen(false);
+      }
+      if (event.key !== "Tab") return;
+      const controls = sidebarRef.current?.querySelectorAll(
+        "a[href], button:not([disabled])"
+      );
+      if (!controls?.length) return;
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = priorOverflow;
+      document.removeEventListener("keydown", onKeyDown);
+      if (trigger?.isConnected) trigger.focus();
+    };
+  }, [menuOpen]);
+
 
   const handleLogout = async () => {
+    setMenuOpen(false);
     await logout();
 
     navigate("/login");
   };
 
+  const handleBack = () => {
+    if (Number(window.history.state?.idx) > 0) {
+      navigate(-1);
+    } else if (window.location.pathname !== "/dashboard") {
+      navigate("/dashboard", { replace: true });
+    }
+  };
 
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div>
-          <h1>TaxiLink</h1>
+        {menuOpen && (
+          <button
+            className="sidebar-scrim"
+            type="button"
+            tabIndex={-1}
+            aria-label="Close navigation overlay"
+            onClick={() => setMenuOpen(false)}
+          />
+        )}
+        <button
+          ref={menuButtonRef}
+          className="sidebar-toggle"
+          type="button"
+          aria-label="Open menu"
+          aria-expanded={menuOpen}
+          aria-controls="main-navigation"
+          inert={menuOpen || undefined}
+          onClick={() => setMenuOpen(true)}
+        >
+          ☰
+        </button>
+        <div className="topbar-heading" inert={menuOpen || undefined}>
 
-          <small>
-            Smart Taxi Demand Monitoring and Dispatch
-          </small>
+          <div>
+            <h1>TaxiLink</h1>
+            <small>
+              Smart Taxi Demand Monitoring and Dispatch
+            </small>
+          </div>
         </div>
 
-        <nav>
+        <nav
+          ref={sidebarRef}
+          id="main-navigation"
+          className={`sidebar-nav${menuOpen ? " is-open" : ""}`}
+          aria-label="Main navigation"
+          role={menuOpen ? "dialog" : undefined}
+          aria-modal={menuOpen || undefined}
+          onClick={(event) => {
+            if (event.target.closest?.("a")) setMenuOpen(false);
+          }}
+        >
+          <div className="sidebar-brand">
+            <strong>TaxiLink</strong>
+            <button
+              type="button"
+              className="sidebar-close"
+              aria-label="Close menu"
+              onClick={() => setMenuOpen(false)}
+            >
+              ×
+            </button>
+          </div>
           <NavLink to="/dashboard">
             Dashboard
           </NavLink>
@@ -282,7 +388,7 @@ export default function AppLayout({
       </header>
 
 
-      <main className="page-container">
+      <main className="page-container" inert={menuOpen || undefined}>
         <div className="user-summary">
           Signed in as{" "}
 
@@ -294,6 +400,20 @@ export default function AppLayout({
 
           {user.role_display}
         </div>
+
+        {location.state?.fromDashboard === true
+          && location.pathname !== "/dashboard" && (
+          <div className="dashboard-return-row">
+            <button
+              className="dashboard-return"
+              type="button"
+              onClick={() => navigate("/dashboard")}
+            >
+              <span aria-hidden="true">←</span>
+              Back to dashboard
+            </button>
+          </div>
+        )}
 
 
         {notificationState === "denied" && (
