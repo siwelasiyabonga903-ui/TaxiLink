@@ -20,6 +20,7 @@ import {
   registerPushNotifications,
 } from "../notifications";
 
+import NotificationCenter from "./NotificationCenter";
 
 const NOTIFICATION_RETRY_DELAY_MS = 15000;
 
@@ -331,6 +332,15 @@ export default function AppLayout({
           </div>
         </div>
 
+        <div
+          className="topbar-notifications"
+          inert={menuOpen || undefined}
+        >
+          <NotificationCenter
+            pushState={notificationState}
+          />
+        </div>
+
         <nav
           ref={sidebarRef}
           id="main-navigation"
@@ -414,42 +424,6 @@ export default function AppLayout({
             </button>
           </div>
         )}
-
-
-        {notificationState === "denied" && (
-          <div
-            className="error-message"
-            role="alert"
-          >
-            Browser notifications are blocked.
-            Enable notifications for TaxiLink in
-            your browser site settings.
-          </div>
-        )}
-
-
-        {notificationState
-          === "unavailable" && (
-          <div
-            className="error-message"
-            role="alert"
-          >
-            Notifications are unavailable on this
-            browser or have not been configured.
-          </div>
-        )}
-
-
-        {notificationState === "error" && (
-          <div
-            className="error-message"
-            role="alert"
-          >
-            Notifications could not connect.
-            TaxiLink will retry automatically.
-          </div>
-        )}
-
 
         {user.role === "PASSENGER" && (
           <PassengerLocationMonitor />

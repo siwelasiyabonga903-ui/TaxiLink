@@ -49,6 +49,16 @@ vi.mock(
   })
 );
 
+vi.mock(
+  "./NotificationCenter",
+  () => ({
+    default: () => (
+      <div data-testid="notification-center">
+        Notification center
+      </div>
+    ),
+  })
+);
 
 function renderLayout(user) {
   mockUseAuth.mockReturnValue({

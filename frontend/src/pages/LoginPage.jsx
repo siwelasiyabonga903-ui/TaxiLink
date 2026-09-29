@@ -1,6 +1,4 @@
 import { useState } from "react";
-import { useAuth } from "../context/AuthContext";
-import api from "../api/client";
 
 import {
   Link,
@@ -9,9 +7,16 @@ import {
   useNavigate,
 } from "react-router-dom";
 
-export default function LoginPage() {
+import api from "../api/client";
+import { useAuth } from "../context/AuthContext";
 
+
+export default function LoginPage() {
   const location = useLocation();
+  const navigate = useNavigate();
+
+  const { user, login } = useAuth();
+
   const [username, setUsername] =
     useState("");
 
@@ -25,57 +30,60 @@ export default function LoginPage() {
     useState(false);
 
   const [showResend, setShowResend] =
-  useState(false);
+    useState(false);
 
   const [
-  verificationEmail,
-  setVerificationEmail,
-] = useState(
-  location.state?.verificationEmail
-  || ""
-);
+    verificationEmail,
+    setVerificationEmail,
+  ] = useState(
+    location.state?.verificationEmail
+    || ""
+  );
 
   const [resending, setResending] =
     useState(false);
 
-  const [resendMessage, setResendMessage] =
-    useState("");
-
-  const { user, login } = useAuth();
-
-  const navigate = useNavigate();
+  const [
+    resendMessage,
+    setResendMessage,
+  ] = useState("");
 
 
   const verificationStatus =
-  new URLSearchParams(
-    location.search
-  ).get("verification");
+    new URLSearchParams(
+      location.search
+    ).get("verification");
 
-const verificationNotice = {
-  success: {
-    className: "success-message",
-    message: (
-      "Email confirmed successfully. "
-      + "You can now sign in."
-    ),
-  },
 
-  already: {
-    className: "success-message",
-    message: (
-      "This email has already been confirmed. "
-      + "You can sign in."
-    ),
-  },
+  const verificationNotice = {
+    success: {
+      className: "success-message",
 
-  invalid: {
-    className: "error-message",
-    message: (
-      "This confirmation link is invalid or "
-      + "has expired. Request a new link."
-    ),
-  },
-}[verificationStatus];
+      message: (
+        "Email confirmed successfully. "
+        + "You can now sign in."
+      ),
+    },
+
+    already: {
+      className: "success-message",
+
+      message: (
+        "This email has already been confirmed. "
+        + "You can sign in."
+      ),
+    },
+
+    invalid: {
+      className: "error-message",
+
+      message: (
+        "This confirmation link is invalid or "
+        + "has expired. Request a new link."
+      ),
+    },
+  }[verificationStatus];
+
 
   if (user) {
     return (
@@ -86,62 +94,64 @@ const verificationNotice = {
     );
   }
 
-const handleResendVerification =
-  async () => {
-    const email =
-      verificationEmail
-        .trim()
-        .toLowerCase();
 
-    setError("");
-    setResendMessage("");
+  const handleResendVerification =
+    async () => {
+      const email =
+        verificationEmail
+          .trim()
+          .toLowerCase();
 
-    if (!email) {
-      setError(
-        "Enter your email address."
-      );
+      setError("");
+      setResendMessage("");
 
-      return;
-    }
+      if (!email) {
+        setError(
+          "Enter your email address."
+        );
 
-    setResending(true);
+        return;
+      }
 
-    try {
-      const response = await api.post(
-        "/accounts/verify-email/resend/",
-        { email }
-      );
+      setResending(true);
 
-      setResendMessage(
-        response.data?.detail
-        || (
-          "If an unverified account exists, "
-          + "a confirmation link has been sent."
-        )
-      );
-    } catch (requestError) {
-      const data =
-        requestError.response?.data;
+      try {
+        const response = await api.post(
+          "/accounts/verify-email/resend/",
+          { email }
+        );
 
-      const firstError = data
-        ? Object.values(data).flat()[0]
-        : null;
+        setResendMessage(
+          response.data?.detail
+          || (
+            "If an unverified account exists, "
+            + "a confirmation link has been sent."
+          )
+        );
+      } catch (requestError) {
+        const data =
+          requestError.response?.data;
 
-      setError(
-        typeof data?.detail === "string"
-          ? data.detail
-          : String(
-              firstError
-              || (
-                "The confirmation email could "
-                + "not be sent. Try again later."
+        const firstError = data
+          ? Object.values(data).flat()[0]
+          : null;
+
+        setError(
+          typeof data?.detail === "string"
+            ? data.detail
+            : String(
+                firstError
+                || (
+                  "The confirmation email could "
+                  + "not be sent. Try again later."
+                )
               )
-            )
-      );
-    } finally {
-      setResending(false);
-    }
-  };
+        );
+      } finally {
+        setResending(false);
+      }
+    };
+
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -151,52 +161,78 @@ const handleResendVerification =
 
     try {
       await login(
-      username.trim(),
-      password
-    );
+        username.trim(),
+        password
+      );
 
       navigate("/dashboard");
     } catch (requestError) {
-  const apiMessage =
-  requestError.response?.data?.detail;
+      const responseStatus =
+        requestError.response?.status;
 
-  const message =
-    typeof apiMessage === "string"
-      ? apiMessage
-      : "Invalid username or password.";
+      const apiMessage =
+        requestError.response?.data?.detail;
 
-  setError(message);
+      const requiresConfirmation =
+        typeof apiMessage === "string"
+        && apiMessage
+          .toLowerCase()
+          .includes("confirm");
 
-  if (
-    message
-      .toLowerCase()
-      .includes("confirm")
-  ) {
-    setShowResend(true);
-  }
+      if (requiresConfirmation) {
+        setError(apiMessage);
+        setShowResend(true);
+      } else if (responseStatus === 401) {
+        setError(
+          "Username or password is incorrect."
+        );
 
-} finally {
+        setShowResend(false);
+      } else {
+        setError(
+          typeof apiMessage === "string"
+            ? apiMessage
+            : (
+              "Login could not be completed. "
+              + "Please try again."
+            )
+        );
+
+        setShowResend(false);
+      }
+    } finally {
       setSubmitting(false);
     }
   };
 
 
   return (
-    
     <div className="auth-page login-page">
-      <aside className="login-intro" aria-label="About TaxiLink">
-        <span className="login-intro-tag">SMART TAXI DISPATCH</span>
-        <h2>Every ride starts with a connection.</h2>
+      <aside
+        className="login-intro"
+        aria-label="About TaxiLink"
+      >
+        <span className="login-intro-tag">
+          SMART TAXI DISPATCH
+        </span>
+
+        <h2>
+          Every ride starts with a connection.
+        </h2>
+
         <p>
-          Passengers, drivers, and dispatchers in sync,
-          from check-in to pickup.
+          Passengers, drivers, and dispatchers
+          in sync, from check-in to pickup.
         </p>
       </aside>
+
       <form
         className="auth-card"
         onSubmit={handleSubmit}
       >
-        <h1>TaxiLink</h1>
+        <h1>
+          TaxiLink
+        </h1>
 
         <p>
           Sign in to continue.
@@ -315,6 +351,7 @@ const handleResendVerification =
 
         <p>
           New passenger?{" "}
+
           <Link to="/register">
             Register
           </Link>
