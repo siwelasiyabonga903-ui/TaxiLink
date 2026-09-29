@@ -17,7 +17,7 @@ export default function LoginPage() {
 
   const { user, login } = useAuth();
 
-  const [username, setUsername] =
+  const [email, setEmail] =
     useState("");
 
   const [password, setPassword] =
@@ -28,26 +28,6 @@ export default function LoginPage() {
 
   const [submitting, setSubmitting] =
     useState(false);
-
-  const [showResend, setShowResend] =
-    useState(false);
-
-  const [
-    verificationEmail,
-    setVerificationEmail,
-  ] = useState(
-    location.state?.verificationEmail
-    || ""
-  );
-
-  const [resending, setResending] =
-    useState(false);
-
-  const [
-    resendMessage,
-    setResendMessage,
-  ] = useState("");
-
 
   const verificationStatus =
     new URLSearchParams(
@@ -75,13 +55,14 @@ export default function LoginPage() {
     },
 
     invalid: {
-      className: "error-message",
+  className: "error-message",
 
-      message: (
-        "This confirmation link is invalid or "
-        + "has expired. Request a new link."
-      ),
-    },
+  message: (
+    "This confirmation link is invalid or "
+    + "has expired. Sign in below to receive "
+    + "a fresh confirmation link."
+  ),
+},
   }[verificationStatus];
 
 
@@ -94,116 +75,70 @@ export default function LoginPage() {
     );
   }
 
-
-  const handleResendVerification =
-    async () => {
-      const email =
-        verificationEmail
-          .trim()
-          .toLowerCase();
-
-      setError("");
-      setResendMessage("");
-
-      if (!email) {
-        setError(
-          "Enter your email address."
-        );
-
-        return;
-      }
-
-      setResending(true);
-
-      try {
-        const response = await api.post(
-          "/accounts/verify-email/resend/",
-          { email }
-        );
-
-        setResendMessage(
-          response.data?.detail
-          || (
-            "If an unverified account exists, "
-            + "a confirmation link has been sent."
-          )
-        );
-      } catch (requestError) {
-        const data =
-          requestError.response?.data;
-
-        const firstError = data
-          ? Object.values(data).flat()[0]
-          : null;
-
-        setError(
-          typeof data?.detail === "string"
-            ? data.detail
-            : String(
-                firstError
-                || (
-                  "The confirmation email could "
-                  + "not be sent. Try again later."
-                )
-              )
-        );
-      } finally {
-        setResending(false);
-      }
-    };
-
-
   const handleSubmit = async (event) => {
-    event.preventDefault();
+  event.preventDefault();
 
-    setError("");
-    setSubmitting(true);
+  const normalizedEmail =
+    email.trim().toLowerCase();
 
-    try {
-      await login(
-        username.trim(),
-        password
-      );
+  setError("");
+  setSubmitting(true);
 
-      navigate("/dashboard");
-    } catch (requestError) {
-      const responseStatus =
-        requestError.response?.status;
+  try {
+    await login(
+      normalizedEmail,
+      password
+    );
 
-      const apiMessage =
-        requestError.response?.data?.detail;
+    navigate("/dashboard");
+  } catch (requestError) {
+    const responseStatus =
+      requestError.response?.status;
 
-      const requiresConfirmation =
-        typeof apiMessage === "string"
-        && apiMessage
-          .toLowerCase()
-          .includes("confirm");
+    const apiMessage =
+      requestError.response?.data?.detail;
 
-      if (requiresConfirmation) {
+    const requiresConfirmation =
+      typeof apiMessage === "string"
+      && apiMessage
+        .toLowerCase()
+        .includes("confirm");
+
+    if (requiresConfirmation) {
+      try {
+        await api.post(
+          "/accounts/verify-email/resend/",
+          {
+            email: normalizedEmail,
+          }
+        );
+
+        setError(
+          "Confirm your email address before "
+          + "logging in. A fresh confirmation "
+          + "link has been sent to your email."
+        );
+      } catch {
         setError(apiMessage);
-        setShowResend(true);
-      } else if (responseStatus === 401) {
-        setError(
-          "Username or password is incorrect."
-        );
-
-        setShowResend(false);
-      } else {
-        setError(
-          typeof apiMessage === "string"
-            ? apiMessage
-            : (
-              "Login could not be completed. "
-              + "Please try again."
-            )
-        );
-
-        setShowResend(false);
       }
-    } finally {
-      setSubmitting(false);
+    } else if (responseStatus === 401) {
+      setError(
+        "Email or password is incorrect."
+      );
+    } else {
+      setError(
+        typeof apiMessage === "string"
+          ? apiMessage
+          : (
+            "Login could not be completed. "
+            + "Please try again."
+          )
+      );
     }
-  };
+  } finally {
+    setSubmitting(false);
+  }
+};
 
 
   return (
@@ -261,14 +196,15 @@ export default function LoginPage() {
         )}
 
         <input
-          value={username}
+          value={email}
           onChange={(event) =>
-            setUsername(
+            setEmail(
               event.target.value
             )
           }
-          placeholder="Username"
-          autoComplete="username"
+          placeholder="Email address"
+          type="email"
+          autoComplete="email"
           required
         />
 
@@ -299,55 +235,6 @@ export default function LoginPage() {
             Forgot password?
           </Link>
         </p>
-
-        <button
-          type="button"
-          onClick={() => {
-            setShowResend(
-              (current) => !current
-            );
-
-            setError("");
-            setResendMessage("");
-          }}
-        >
-          Resend confirmation email
-        </button>
-
-        {showResend && (
-          <div>
-            <input
-              type="email"
-              value={verificationEmail}
-              onChange={(event) =>
-                setVerificationEmail(
-                  event.target.value
-                )
-              }
-              placeholder="Registration email"
-              autoComplete="email"
-              aria-label="Registration email"
-            />
-
-            <button
-              type="button"
-              disabled={resending}
-              onClick={
-                handleResendVerification
-              }
-            >
-              {resending
-                ? "Sending..."
-                : "Send confirmation link"}
-            </button>
-          </div>
-        )}
-
-        {resendMessage && (
-          <div className="success-message">
-            {resendMessage}
-          </div>
-        )}
 
         <p>
           New passenger?{" "}

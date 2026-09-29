@@ -5,7 +5,6 @@ import { useAuth } from "../context/AuthContext";
 
 
 const initialForm = {
-  username: "",
   first_name: "",
   last_name: "",
   email: "",
@@ -56,8 +55,6 @@ export default function RegisterPage() {
               "Registration successful. "
               + "Check your email to confirm your account."
             ),
-          verificationEmail:
-            form.email.trim().toLowerCase(),
         },
       });
     } catch (requestError) {
@@ -83,13 +80,6 @@ export default function RegisterPage() {
 
         {error && <div className="error-message">{error}</div>}
 
-        <input
-          name="username"
-          placeholder="Username"
-          value={form.username}
-          onChange={handleChange}
-          required
-        />
 
         <div className="form-row">
           <input

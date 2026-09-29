@@ -59,7 +59,7 @@ def send_verification_email(
             ),
             message=(
                 f"Hello "
-                f"{user.first_name or user.username},\n\n"
+                f"{user.first_name or user.email},\n\n"
                 "Confirm your TaxiLink email "
                 "address using this link:\n\n"
                 f"{verification_url}\n\n"
@@ -115,10 +115,10 @@ def send_driver_credentials_email(
             ),
             message=(
                 f"Hello "
-                f"{user.first_name or user.username},\n\n"
+                f"{user.first_name or user.email},\n\n"
                 "A TaxiLink driver account has "
                 "been created for you.\n\n"
-                f"Username: {user.username}\n"
+                f"Email: {user.email}\n"
                 f"Temporary password: "
                 f"{temporary_password}\n"
                 f"{verification_section}\n"

@@ -134,35 +134,39 @@ export function AuthProvider({ children }) {
 
 
   const login = async (
-    username,
-    password
-  ) => {
-    const tokenResponse = await api.post(
-      "/accounts/login/",
-      {
-        username,
-        password,
-      }
-    );
+  email,
+  password
+) => {
+  const normalizedEmail =
+    email.trim().toLowerCase();
 
-    localStorage.setItem(
-      "access_token",
-      tokenResponse.data.access
-    );
+  const tokenResponse = await api.post(
+    "/accounts/login/",
+    {
+      // Django still uses this internal key.
+      username: normalizedEmail,
+      password,
+    }
+  );
 
-    localStorage.setItem(
-      "refresh_token",
-      tokenResponse.data.refresh
-    );
+  localStorage.setItem(
+    "access_token",
+    tokenResponse.data.access
+  );
 
-    const profileResponse = await api.get(
-      "/accounts/me/"
-    );
+  localStorage.setItem(
+    "refresh_token",
+    tokenResponse.data.refresh
+  );
 
-    setUser(profileResponse.data);
+  const profileResponse = await api.get(
+    "/accounts/me/"
+  );
 
-    return profileResponse.data;
-  };
+  setUser(profileResponse.data);
+
+  return profileResponse.data;
+};
 
 
   const changeDriverPassword = async (

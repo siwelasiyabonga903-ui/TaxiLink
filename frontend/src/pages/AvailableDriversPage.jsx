@@ -118,8 +118,8 @@ export default function AvailableDriversPage() {
                 </p>
 
                 <p>
-                    Username:{" "}
-                    {driver.username}
+                  <strong>Email:</strong>{" "}
+                  {driver.email}
                 </p>
 
                 {driver.phone_number && (

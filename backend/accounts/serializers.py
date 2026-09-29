@@ -17,9 +17,15 @@ User = get_user_model()
 def normalize_unique_email(value):
     email = value.strip().lower()
 
-    if User.objects.filter(
+    email_exists = User.objects.filter(
         email__iexact=email
-    ).exists():
+    ).exists()
+
+    username_conflict = User.objects.filter(
+        username__iexact=email
+    ).exists()
+
+    if email_exists or username_conflict:
         raise serializers.ValidationError(
             "An account with this email already exists."
         )
@@ -58,6 +64,10 @@ class PassengerRegistrationSerializer(
     serializers.ModelSerializer
 ):
 
+    email = serializers.EmailField(
+        max_length=150,
+    )
+
     phone_number = serializers.CharField(
         min_length=10,
         max_length=10,
@@ -78,7 +88,6 @@ class PassengerRegistrationSerializer(
         model = User
 
         fields = (
-            "username",
             "first_name",
             "last_name",
             "email",
@@ -104,7 +113,7 @@ class PassengerRegistrationSerializer(
             )
 
         candidate_user = User(
-            username=attrs.get("username", ""),
+            username=attrs.get("email", ""),
             first_name=attrs.get("first_name", ""),
             last_name=attrs.get("last_name", ""),
             email=attrs.get("email", ""),
@@ -131,11 +140,19 @@ class PassengerRegistrationSerializer(
             "password_confirm"
         )
 
+        validated_data.pop(
+            "username",
+            None,
+        )
+
+        email = validated_data["email"]
+
         password = validated_data.pop(
             "password"
         )
 
         user = User.objects.create_user(
+            username=email,
             password=password,
             role=User.Role.PASSENGER,
             email_verified=False,
@@ -214,6 +231,10 @@ class DriverRegistrationSerializer(
     serializers.ModelSerializer
 ):
 
+    email = serializers.EmailField(
+        max_length=150,
+    )
+
     phone_number = serializers.CharField(
         min_length=10,
         max_length=10,
@@ -233,7 +254,6 @@ class DriverRegistrationSerializer(
         model = User
 
         fields = (
-            "username",
             "first_name",
             "last_name",
             "email",
@@ -279,7 +299,15 @@ class DriverRegistrationSerializer(
             generate_temporary_password()
         )
 
+        validated_data.pop(
+            "username",
+            None,
+        )
+
+        email = validated_data["email"]
+
         user = User.objects.create_user(
+            username=email,
             password=temporary_password,
             role=User.Role.DRIVER,
             must_change_password=True,
@@ -287,8 +315,6 @@ class DriverRegistrationSerializer(
             **validated_data,
         )
 
-        # Stored only temporarily in memory so it can
-        # be returned once in the creation response.
         user._temporary_password = (
             temporary_password
         )
@@ -605,29 +631,37 @@ class TaxiLinkTokenObtainPairSerializer(
     TokenObtainPairSerializer
 ):
     def validate(self, attrs):
-        username = attrs.get(
+        identifier = attrs.get(
             self.username_field,
             "",
-        )
+        ).strip().lower()
 
         password = attrs.get(
             "password",
             "",
         )
 
+        # Email is now the public login identity.
         user = User.objects.filter(
-            **{
-                self.username_field:
-                    username
-            }
+            email__iexact=identifier
         ).first()
+
+        # Temporary compatibility for accounts
+        # created before the email-login change.
+        if user is None:
+            user = User.objects.filter(
+                username__iexact=identifier
+            ).first()
+
+        if user is not None:
+            attrs[
+                self.username_field
+            ] = user.username
 
         if (
             user
             and user.is_active
-            and user.check_password(
-                password
-            )
+            and user.check_password(password)
             and not user.email_verified
         ):
             raise AuthenticationFailed(
@@ -638,6 +672,4 @@ class TaxiLinkTokenObtainPairSerializer(
                 code="email_not_verified",
             )
 
-        return super().validate(
-            attrs
-        )
+        return super().validate(attrs)

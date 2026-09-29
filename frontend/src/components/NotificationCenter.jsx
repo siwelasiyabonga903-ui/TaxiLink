@@ -73,9 +73,16 @@ export default function NotificationCenter({
     useState(false);
 
   const containerRef = useRef(null);
+  const triggerRef = useRef(null);
   const mountedRef = useRef(false);
   const requestInFlightRef = useRef(false);
   const readOverridesRef = useRef(new Set());
+
+
+  const closePanel = useCallback(() => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }, []);
 
 
   const loadNotifications = useCallback(
@@ -224,7 +231,7 @@ export default function NotificationCenter({
 
     const closeOnEscape = (event) => {
       if (event.key === "Escape") {
-        setOpen(false);
+        closePanel();
       }
     };
 
@@ -249,7 +256,10 @@ export default function NotificationCenter({
         closeOnEscape
       );
     };
-  }, [open]);
+  }, [
+    open,
+    closePanel,
+  ]);
 
 
   const markRead = async (notification) => {
@@ -377,6 +387,7 @@ export default function NotificationCenter({
       ref={containerRef}
     >
       <button
+        ref={triggerRef}
         className="notification-bell"
         type="button"
         aria-label={
@@ -413,7 +424,9 @@ export default function NotificationCenter({
         >
           <header className="notification-panel-header">
             <div>
-              <strong>Notifications</strong>
+              <strong>
+                Notifications
+              </strong>
 
               <small>
                 {unreadCount === 0
@@ -422,18 +435,31 @@ export default function NotificationCenter({
               </small>
             </div>
 
-            {unreadCount > 0 && (
+            <div className="notification-header-actions">
+              {unreadCount > 0 && (
+                <button
+                  className="notification-mark-all"
+                  type="button"
+                  disabled={markingAll}
+                  onClick={markAllRead}
+                >
+                  {markingAll
+                    ? "Marking..."
+                    : "Mark all read"}
+                </button>
+              )}
+
               <button
-                className="notification-mark-all"
+                className="notification-close"
                 type="button"
-                disabled={markingAll}
-                onClick={markAllRead}
+                aria-label="Close notifications"
+                onClick={closePanel}
               >
-                {markingAll
-                  ? "Marking..."
-                  : "Mark all read"}
+                <span aria-hidden="true">
+                  ×
+                </span>
               </button>
-            )}
+            </div>
           </header>
 
           {deviceMessage && (
@@ -483,7 +509,9 @@ export default function NotificationCenter({
                     </span>
 
                     <time
-                      dateTime={notification.created_at}
+                      dateTime={
+                        notification.created_at
+                      }
                     >
                       {formatNotificationTime(
                         notification.created_at

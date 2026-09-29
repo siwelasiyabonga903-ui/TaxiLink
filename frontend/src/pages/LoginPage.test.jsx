@@ -68,7 +68,9 @@ function renderLogin(
         <Route
           path="/dashboard"
           element={
-            <div>Dashboard loaded</div>
+            <div>
+              Dashboard loaded
+            </div>
           }
         />
       </Routes>
@@ -92,6 +94,7 @@ describe(
         },
       });
     });
+
 
     afterEach(() => {
       cleanup();
@@ -131,14 +134,16 @@ describe(
 
 
     it(
-      "shows resend controls when unverified login is blocked",
+      "automatically resends confirmation after a blocked login",
       async () => {
         authMocks.login.mockRejectedValue({
           response: {
+            status: 401,
+
             data: {
               detail: (
-                "Confirm your email before "
-                + "signing in."
+                "Confirm your email address "
+                + "before logging in."
               ),
             },
           },
@@ -148,11 +153,12 @@ describe(
 
         fireEvent.change(
           screen.getByPlaceholderText(
-            "Username"
+            "Email address"
           ),
           {
             target: {
-              value: "passenger1",
+              value:
+                "Passenger@Example.COM",
             },
           }
         );
@@ -163,58 +169,8 @@ describe(
           ),
           {
             target: {
-              value: "StrongPass123!",
-            },
-          }
-        );
-
-        fireEvent.click(
-          screen.getByRole(
-            "button",
-            { name: "Login" }
-          )
-        );
-
-        expect(
-          await screen.findByText(
-            /Confirm your email/i
-          )
-        ).toBeInTheDocument();
-
-        expect(
-          screen.getByLabelText(
-            "Registration email"
-          )
-        ).toBeInTheDocument();
-      }
-    );
-
-
-    it(
-      "resends confirmation to a normalized email",
-      async () => {
-        renderLogin();
-
-        fireEvent.click(
-          screen.getByRole(
-            "button",
-            {
-              name: (
-                "Resend confirmation email"
-              ),
-            }
-          )
-        );
-
-        fireEvent.change(
-          screen.getByLabelText(
-            "Registration email"
-          ),
-          {
-            target: {
-              value: (
-                "  Passenger@Example.COM  "
-              ),
+              value:
+                "StrongPass123!",
             },
           }
         );
@@ -223,12 +179,19 @@ describe(
           screen.getByRole(
             "button",
             {
-              name: (
-                "Send confirmation link"
-              ),
+              name: "Login",
             }
           )
         );
+
+        await waitFor(() => {
+          expect(
+            authMocks.login
+          ).toHaveBeenCalledWith(
+            "passenger@example.com",
+            "StrongPass123!"
+          );
+        });
 
         await waitFor(() => {
           expect(
@@ -247,72 +210,47 @@ describe(
 
         expect(
           await screen.findByText(
-            /confirmation link has been sent/i
+            /fresh confirmation link has been sent/i
           )
         ).toBeInTheDocument();
-      }
-    );
-
-
-    it(
-      "prefills the registration email",
-      () => {
-        renderLogin({
-          pathname: "/login",
-          state: {
-            message: (
-              "Registration successful. "
-              + "Check your email."
-            ),
-            verificationEmail:
-              "passenger@example.com",
-          },
-        });
 
         expect(
-          screen.getByText(
-            /Registration successful/i
-          )
-        ).toBeInTheDocument();
-
-        fireEvent.click(
-          screen.getByRole(
+          screen.queryByRole(
             "button",
             {
-              name: (
-                "Resend confirmation email"
-              ),
+              name:
+                /Resend confirmation email/i,
             }
           )
-        );
-
-        expect(
-          screen.getByLabelText(
-            "Registration email"
-          )
-        ).toHaveValue(
-          "passenger@example.com"
-        );
+        ).not.toBeInTheDocument();
       }
     );
 
 
     it(
-      "trims username but preserves password spaces",
+      "shows an email or password error for invalid credentials",
       async () => {
-        authMocks.login.mockResolvedValue(
-          {}
-        );
+        authMocks.login.mockRejectedValue({
+          response: {
+            status: 401,
+
+            data: {
+              detail:
+                "No active account found.",
+            },
+          },
+        });
 
         renderLogin();
 
         fireEvent.change(
           screen.getByPlaceholderText(
-            "Username"
+            "Email address"
           ),
           {
             target: {
-              value: "  passenger1  ",
+              value:
+                "passenger@example.com",
             },
           }
         );
@@ -323,7 +261,8 @@ describe(
           ),
           {
             target: {
-              value: " Keep Spaces!1 ",
+              value:
+                "WrongPassword123!",
             },
           }
         );
@@ -331,7 +270,103 @@ describe(
         fireEvent.click(
           screen.getByRole(
             "button",
-            { name: "Login" }
+            {
+              name: "Login",
+            }
+          )
+        );
+
+        expect(
+          await screen.findByText(
+            "Email or password is incorrect."
+          )
+        ).toBeInTheDocument();
+
+        expect(
+          api.post
+        ).not.toHaveBeenCalled();
+      }
+    );
+
+
+    it(
+      "shows registration success without resend controls",
+      () => {
+        renderLogin({
+          pathname: "/login",
+
+          state: {
+            message: (
+              "Registration successful. "
+              + "Check your email."
+            ),
+          },
+        });
+
+        expect(
+          screen.getByText(
+            /Registration successful/i
+          )
+        ).toBeInTheDocument();
+
+        expect(
+          screen.queryByRole(
+            "button",
+            {
+              name:
+                /Resend confirmation email/i,
+            }
+          )
+        ).not.toBeInTheDocument();
+
+        expect(
+          screen.queryByLabelText(
+            "Registration email"
+          )
+        ).not.toBeInTheDocument();
+      }
+    );
+
+
+    it(
+      "normalizes email but preserves password spaces",
+      async () => {
+        authMocks.login.mockResolvedValue(
+          {}
+        );
+
+        renderLogin();
+
+        fireEvent.change(
+          screen.getByPlaceholderText(
+            "Email address"
+          ),
+          {
+            target: {
+              value:
+                "Passenger@Example.COM",
+            },
+          }
+        );
+
+        fireEvent.change(
+          screen.getByPlaceholderText(
+            "Password"
+          ),
+          {
+            target: {
+              value:
+                " Keep Spaces!1 ",
+            },
+          }
+        );
+
+        fireEvent.click(
+          screen.getByRole(
+            "button",
+            {
+              name: "Login",
+            }
           )
         );
 
@@ -339,7 +374,7 @@ describe(
           expect(
             authMocks.login
           ).toHaveBeenCalledWith(
-            "passenger1",
+            "passenger@example.com",
             " Keep Spaces!1 "
           );
         });

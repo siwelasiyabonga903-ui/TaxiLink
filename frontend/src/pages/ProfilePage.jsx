@@ -190,17 +190,9 @@ export default function ProfilePage() {
         )}
 
         <form onSubmit={handleSubmit}>
-          <label>
-            Username
-
-            <input
-              value={user.username}
-              disabled
-            />
-          </label>
 
           <label>
-            Email
+            Email (used to sign in)
 
             <input
               value={user.email}

@@ -107,6 +107,57 @@ describe("NotificationCenter", () => {
     }
   );
 
+  it(
+  "closes the panel and returns focus to the notification bell",
+  async () => {
+    render(
+      <NotificationCenter />
+    );
+
+    const bell =
+      await screen.findByRole(
+        "button",
+        {
+          name:
+            "1 unread notifications",
+        }
+      );
+
+    fireEvent.click(bell);
+
+    expect(
+      screen.getByRole(
+        "region",
+        {
+          name:
+            "TaxiLink notifications",
+        }
+      )
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole(
+        "button",
+        {
+          name:
+            "Close notifications",
+        }
+      )
+    );
+
+    expect(
+      screen.queryByRole(
+        "region",
+        {
+          name:
+            "TaxiLink notifications",
+        }
+      )
+    ).not.toBeInTheDocument();
+
+    expect(bell).toHaveFocus();
+  }
+);
 
   it(
     "marks one notification as read",

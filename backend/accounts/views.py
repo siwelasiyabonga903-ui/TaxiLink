@@ -464,7 +464,7 @@ class DriverTemporaryPasswordResetView(
 
                 "driver_id": driver.id,
 
-                "username": driver.username,
+                "email": driver.email,
 
                 "temporary_password": (
                     temporary_password
@@ -490,7 +490,7 @@ class DriverManagementListView(
         ).order_by(
             "first_name",
             "last_name",
-            "username",
+            "email",
         )
 
 class PasswordResetRequestView(

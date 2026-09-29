@@ -191,7 +191,7 @@ export default function AppLayout({
         window.clearTimeout(retryTimer);
       }
     };
-  }, [user.username]);
+  }, [user.id]);
 
 
   useEffect(() => {
@@ -403,7 +403,15 @@ export default function AppLayout({
           Signed in as{" "}
 
           <strong>
-            {user.username}
+            {
+              [
+                user.first_name,
+                user.last_name,
+              ]
+                .filter(Boolean)
+                .join(" ")
+              || user.email
+            }
           </strong>
 
           {" · "}

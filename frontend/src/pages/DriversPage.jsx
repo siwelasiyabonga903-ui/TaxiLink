@@ -11,7 +11,6 @@ import { useAuth } from "../context/AuthContext";
 
 
 const initialDriverForm = {
-  username: "",
   first_name: "",
   last_name: "",
   email: "",
@@ -260,8 +259,6 @@ export default function DriversPage() {
         "/accounts/drivers/register/",
         {
           ...driverForm,
-          username:
-            driverForm.username.trim(),
 
           first_name:
             driverForm.first_name.trim(),
@@ -283,12 +280,11 @@ export default function DriversPage() {
       );
 
       setGeneratedDriverCredentials({
-        username:
-          response.data.username,
+        email:
+          response.data.email,
 
         temporaryPassword:
-          response.data
-            .temporary_password,
+          response.data.temporary_password,
       });
 
       setDriverForm(
@@ -339,8 +335,8 @@ export default function DriversPage() {
           driverId:
             driver.id,
 
-          username:
-            response.data.username,
+          email:
+            response.data.email,
 
           temporaryPassword:
             response.data
@@ -443,14 +439,6 @@ export default function DriversPage() {
                   </h4>
 
                   <p>
-                    Username:{" "}
-
-                    <strong>
-                      {driver.username}
-                    </strong>
-                  </p>
-
-                  <p>
                     Number plate:{" "}
 
                     <strong>
@@ -533,21 +521,6 @@ export default function DriversPage() {
                 addDriver
               }
             >
-              <label>
-                Username
-
-                <input
-                  name="username"
-                  value={
-                    driverForm.username
-                  }
-                  onChange={
-                    handleDriverChange
-                  }
-                  required
-                />
-              </label>
-
 
               <div className="form-row">
                 <label>
@@ -695,12 +668,11 @@ export default function DriversPage() {
             </h3>
 
             <p>
-              Username:{" "}
+              Email:{" "}
 
               <strong>
                 {
-                  generatedDriverCredentials
-                    .username
+                  generatedDriverCredentials.email
                 }
               </strong>
             </p>
@@ -775,12 +747,11 @@ export default function DriversPage() {
             </h3>
 
             <p>
-              Username:{" "}
+              Email:{" "}
 
               <strong>
                 {
-                  resetDriverCredentials
-                    .username
+                  resetDriverCredentials.email
                 }
               </strong>
             </p>

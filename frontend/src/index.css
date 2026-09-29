@@ -1269,6 +1269,36 @@ a {
   font-size: 12px;
 }
 
+.notification-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.notification-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  min-height: 36px;
+  padding: 0;
+  border: 1px solid #d8e2f0;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #10264f;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.notification-close:hover {
+  background: #edf3ff;
+}
+
+.notification-close:focus-visible {
+  outline: 3px solid #7aa2f7;
+  outline-offset: 2px;
+}
+
 .notification-mark-all {
   flex: none;
   min-height: 36px;
@@ -1389,6 +1419,8 @@ a {
     width: auto;
     max-height: calc(100dvh - 90px);
   }
+
+
 
   .notification-panel-header {
     padding: 14px;
