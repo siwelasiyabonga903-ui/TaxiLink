@@ -1,7 +1,12 @@
+import logging
+
 from firebase_admin import messaging
 
 from .firebase import get_firebase_app
 from .models import DeviceToken
+
+
+logger = logging.getLogger(__name__)
 
 
 def send_push_notification(
@@ -61,6 +66,15 @@ def send_push_notification(
             )
         )
     except Exception:
+        logger.exception(
+            (
+                "FCM multicast request failed "
+                "for recipient_id=%s token_count=%s"
+            ),
+            recipient.id,
+            len(tokens),
+        )
+
         # Database notifications must continue
         # working even if Firebase is unavailable.
         return {
@@ -77,8 +91,21 @@ def send_push_notification(
         if send_response.success:
             continue
 
+        push_error = send_response.exception
+
+        logger.error(
+            (
+                "FCM token delivery failed "
+                "for recipient_id=%s "
+                "error_type=%s error=%s"
+            ),
+            recipient.id,
+            type(push_error).__name__,
+            push_error,
+        )
+
         if isinstance(
-            send_response.exception,
+            push_error,
             messaging.UnregisteredError,
         ):
             invalid_tokens.append(

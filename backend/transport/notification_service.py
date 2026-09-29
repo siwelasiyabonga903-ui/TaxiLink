@@ -1,7 +1,12 @@
+import logging
+
 from django.db import transaction
 
 from .fcm_service import send_push_notification
 from .models import Notification
+
+
+logger = logging.getLogger(__name__)
 
 
 def _schedule_push(notification):
@@ -30,9 +35,18 @@ def _schedule_push(notification):
                 data=data,
             )
         except Exception:
+            logger.exception(
+                (
+                    "Unexpected push failure "
+                    "for notification_id=%s "
+                    "recipient_id=%s"
+                ),
+                notification.id,
+                notification.recipient_id,
+            )
+
             # FCM must never break
             # the core TaxiLink workflow.
-            pass
 
     transaction.on_commit(send)
 
