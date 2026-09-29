@@ -52,7 +52,9 @@ export default function ForgotPasswordPage() {
       const response = await api.post(
         "/accounts/password-reset/",
         {
-          email,
+          email: email
+            .trim()
+            .toLowerCase(),
         }
       );
 

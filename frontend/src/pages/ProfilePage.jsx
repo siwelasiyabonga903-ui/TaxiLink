@@ -79,11 +79,20 @@ export default function ProfilePage() {
 
 
   const handleChange = (event) => {
-    setForm({
-      ...form,
-      [event.target.name]:
-        event.target.value,
-    });
+    const { name, value } =
+      event.target;
+
+    const nextValue =
+      name === "phone_number"
+        ? value
+            .replace(/\D/g, "")
+            .slice(0, 10)
+        : value;
+
+    setForm((current) => ({
+      ...current,
+      [name]: nextValue,
+    }));
   };
 
 
@@ -112,9 +121,12 @@ export default function ProfilePage() {
       setMessage(
         "Profile updated successfully."
       );
-    } catch {
+    } catch (requestError) {
       setError(
-        "The profile could not be updated."
+        extractError(
+          requestError,
+          "The profile could not be updated."
+        )
       );
     }
   };
@@ -232,8 +244,14 @@ export default function ProfilePage() {
 
             <input
               name="phone_number"
+              type="tel"
+              inputMode="numeric"
               value={form.phone_number}
               onChange={handleChange}
+              pattern="0[0-9]{9}"
+              maxLength="10"
+              title="Enter a 10-digit phone number starting with 0."
+              autoComplete="tel"
               required
             />
           </label>
@@ -294,8 +312,16 @@ export default function ProfilePage() {
               }
               autoComplete="new-password"
               minLength="8"
+              pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9\s]).{8,}"
+              title="Use at least 8 characters with uppercase, lowercase, a number, and a special character."
               required
             />
+
+            <small>
+              At least 8 characters, including uppercase,
+              lowercase, a number, and a special character.
+            </small>
+
           </label>
 
           <label>

@@ -9,6 +9,9 @@ class User(AbstractUser):
         DISPATCHER = "DISPATCHER", "Dispatcher"
 
     email = models.EmailField(unique=True)
+    email_verified = models.BooleanField(
+        default=True,
+    )
 
     phone_number = models.CharField(
         max_length=20,

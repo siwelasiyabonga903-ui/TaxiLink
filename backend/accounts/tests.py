@@ -3,7 +3,9 @@ from django.urls import reverse
 
 from rest_framework import status
 from rest_framework.test import APITestCase
+from unittest.mock import patch
 
+from django.test import override_settings
 from django.contrib.auth.tokens import (
     default_token_generator,
 )
@@ -12,7 +14,9 @@ from django.utils.encoding import force_bytes
 from django.utils.http import (
     urlsafe_base64_encode,
 )
-
+from .serializers import (
+    PassengerRegistrationSerializer,
+)
 User = get_user_model()
 
 
@@ -1352,3 +1356,582 @@ class AccountPasswordChangeTests(
             response.status_code,
             status.HTTP_401_UNAUTHORIZED,
         )
+
+class PassengerRegistrationValidationTests(
+    APITestCase
+):
+    def valid_data(self):
+        return {
+            "username": "new_passenger",
+            "first_name": "Test",
+            "last_name": "Passenger",
+            "email": "passenger@example.com",
+            "phone_number": "0712345678",
+            "password": "StrongPass123!",
+            "password_confirm": "StrongPass123!",
+        }
+
+    def test_valid_registration_data_is_accepted(
+        self
+    ):
+        serializer = (
+            PassengerRegistrationSerializer(
+                data=self.valid_data()
+            )
+        )
+
+        self.assertTrue(
+            serializer.is_valid(),
+            serializer.errors,
+        )
+
+    def test_phone_number_must_start_with_zero(
+        self
+    ):
+        data = self.valid_data()
+        data["phone_number"] = "7112345678"
+
+        serializer = (
+            PassengerRegistrationSerializer(
+                data=data
+            )
+        )
+
+        self.assertFalse(
+            serializer.is_valid()
+        )
+
+        self.assertIn(
+            "phone_number",
+            serializer.errors,
+        )
+
+    def test_phone_number_must_have_ten_digits(
+        self
+    ):
+        for phone_number in (
+            "071234567",
+            "07123456789",
+            "07123abc78",
+        ):
+            with self.subTest(
+                phone_number=phone_number
+            ):
+                data = self.valid_data()
+
+                data["phone_number"] = (
+                    phone_number
+                )
+
+                serializer = (
+                    PassengerRegistrationSerializer(
+                        data=data
+                    )
+                )
+
+                self.assertFalse(
+                    serializer.is_valid()
+                )
+
+                self.assertIn(
+                    "phone_number",
+                    serializer.errors,
+                )
+
+    def test_invalid_email_is_rejected(self):
+        data = self.valid_data()
+        data["email"] = "not-an-email"
+
+        serializer = (
+            PassengerRegistrationSerializer(
+                data=data
+            )
+        )
+
+        self.assertFalse(
+            serializer.is_valid()
+        )
+
+        self.assertIn(
+            "email",
+            serializer.errors,
+        )
+
+    def test_duplicate_email_is_case_insensitive(
+        self
+    ):
+        User.objects.create_user(
+            username="existing_passenger",
+            email="Existing@Example.com",
+            password="StrongPass123!",
+            role=User.Role.PASSENGER,
+        )
+
+        data = self.valid_data()
+        data["email"] = "existing@example.com"
+
+        serializer = (
+            PassengerRegistrationSerializer(
+                data=data
+            )
+        )
+
+        self.assertFalse(
+            serializer.is_valid()
+        )
+
+        self.assertIn(
+            "email",
+            serializer.errors,
+        )
+
+    def test_password_complexity_is_enforced(
+        self
+    ):
+        weak_passwords = (
+            "lowercase123!",
+            "UPPERCASE123!",
+            "NoNumberHere!",
+            "NoSpecial123",
+        )
+
+        for password in weak_passwords:
+            with self.subTest(
+                password=password
+            ):
+                data = self.valid_data()
+                data["password"] = password
+                data[
+                    "password_confirm"
+                ] = password
+
+                serializer = (
+                    PassengerRegistrationSerializer(
+                        data=data
+                    )
+                )
+
+                self.assertFalse(
+                    serializer.is_valid()
+                )
+
+                self.assertIn(
+                    "password",
+                    serializer.errors,
+                )
+@override_settings(
+    EMAIL_BACKEND=(
+        "django.core.mail.backends."
+        "locmem.EmailBackend"
+    ),
+    FRONTEND_URL="http://frontend.test",
+)
+class EmailVerificationFlowTests(
+    APITestCase
+):
+    def setUp(self):
+        self.registration_url = reverse(
+            "passenger-register"
+        )
+
+        self.login_url = reverse(
+            "token-obtain-pair"
+        )
+
+        self.resend_url = reverse(
+            "email-verification-resend"
+        )
+
+        self.registration_data = {
+            "username": "email_test_passenger",
+            "first_name": "Email",
+            "last_name": "Tester",
+            "email": "emailtest@example.com",
+            "phone_number": "0712345678",
+            "password": "StrongPass123!",
+            "password_confirm": "StrongPass123!",
+        }
+
+    def register_passenger(self):
+        return self.client.post(
+            self.registration_url,
+            self.registration_data,
+            format="json",
+        )
+
+    def create_driver(self):
+        dispatcher = User.objects.create_user(
+            username="email_dispatcher",
+            email="dispatcher@example.com",
+            password="StrongPass123!",
+            role=User.Role.DISPATCHER,
+            email_verified=True,
+        )
+
+        self.client.force_authenticate(
+            user=dispatcher
+        )
+
+        response = self.client.post(
+            reverse("driver-register"),
+            {
+                "username": "email_driver",
+                "first_name": "Driver",
+                "last_name": "Tester",
+                "email": "driver@example.com",
+                "phone_number": "0723456789",
+                "number_plate": "EMAIL 01",
+            },
+            format="json",
+        )
+
+        return response
+
+    def test_registration_creates_unverified_user_and_sends_email(
+        self,
+    ):
+        response = self.register_passenger()
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+        )
+
+        user = User.objects.get(
+            username="email_test_passenger"
+        )
+
+        self.assertFalse(
+            user.email_verified
+        )
+
+        self.assertTrue(
+            response.data["email_sent"]
+        )
+
+        self.assertEqual(
+            len(mail.outbox),
+            1,
+        )
+
+        self.assertIn(
+            reverse("email-verify"),
+            mail.outbox[0].body,
+        )
+
+    def test_unverified_user_cannot_login(
+        self,
+    ):
+        self.register_passenger()
+
+        response = self.client.post(
+            self.login_url,
+            {
+                "username": (
+                    "email_test_passenger"
+                ),
+                "password": "StrongPass123!",
+            },
+            format="json",
+        )
+
+        self.assertIn(
+            response.status_code,
+            (
+                status.HTTP_400_BAD_REQUEST,
+                status.HTTP_401_UNAUTHORIZED,
+            ),
+        )
+
+        self.assertNotIn(
+            "access",
+            response.data,
+        )
+
+    def test_valid_link_verifies_user_and_allows_login(
+        self,
+    ):
+        self.register_passenger()
+
+        user = User.objects.get(
+            username="email_test_passenger"
+        )
+
+        uid = urlsafe_base64_encode(
+            force_bytes(user.pk)
+        )
+
+        token = (
+            default_token_generator
+            .make_token(user)
+        )
+
+        verification_url = (
+            f"{reverse('email-verify')}"
+            f"?uid={uid}&token={token}"
+        )
+
+        response = self.client.get(
+            verification_url
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_302_FOUND,
+        )
+
+        self.assertEqual(
+            response["Location"],
+            (
+                "http://frontend.test"
+                "/login?verification=success"
+            ),
+        )
+
+        user.refresh_from_db()
+
+        self.assertTrue(
+            user.email_verified
+        )
+
+        login_response = self.client.post(
+            self.login_url,
+            {
+                "username": user.username,
+                "password": "StrongPass123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            login_response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        self.assertIn(
+            "access",
+            login_response.data,
+        )
+
+    def test_invalid_link_does_not_verify_user(
+        self,
+    ):
+        self.register_passenger()
+
+        user = User.objects.get(
+            username="email_test_passenger"
+        )
+
+        uid = urlsafe_base64_encode(
+            force_bytes(user.pk)
+        )
+
+        response = self.client.get(
+            (
+                f"{reverse('email-verify')}"
+                f"?uid={uid}&token=invalid-token"
+            )
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_302_FOUND,
+        )
+
+        self.assertEqual(
+            response["Location"],
+            (
+                "http://frontend.test"
+                "/login?verification=invalid"
+            ),
+        )
+
+        user.refresh_from_db()
+
+        self.assertFalse(
+            user.email_verified
+        )
+
+    def test_resend_sends_email_without_revealing_accounts(
+        self,
+    ):
+        self.register_passenger()
+        mail.outbox.clear()
+
+        existing_response = self.client.post(
+            self.resend_url,
+            {
+                "email": "emailtest@example.com",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            existing_response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        self.assertEqual(
+            len(mail.outbox),
+            1,
+        )
+
+        mail.outbox.clear()
+
+        unknown_response = self.client.post(
+            self.resend_url,
+            {
+                "email": "unknown@example.com",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            unknown_response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        self.assertEqual(
+            len(mail.outbox),
+            0,
+        )
+
+        self.assertEqual(
+            existing_response.data["detail"],
+            unknown_response.data["detail"],
+        )
+
+    def test_driver_receives_temporary_password_email(
+        self,
+    ):
+        response = self.create_driver()
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+        )
+
+        driver = User.objects.get(
+            username="email_driver"
+        )
+
+        self.assertFalse(
+            driver.email_verified
+        )
+
+        temporary_password = (
+            response.data["temporary_password"]
+        )
+
+        self.assertTrue(
+            response.data["email_sent"]
+        )
+
+        self.assertEqual(
+            len(mail.outbox),
+            1,
+        )
+
+        self.assertIn(
+            driver.username,
+            mail.outbox[0].body,
+        )
+
+        self.assertIn(
+            temporary_password,
+            mail.outbox[0].body,
+        )
+
+        self.assertIn(
+            reverse("email-verify"),
+            mail.outbox[0].body,
+        )
+
+    def test_regenerated_driver_password_is_emailed(
+        self,
+    ):
+        create_response = self.create_driver()
+
+        driver = User.objects.get(
+            username="email_driver"
+        )
+
+        old_password = (
+            create_response.data[
+                "temporary_password"
+            ]
+        )
+
+        mail.outbox.clear()
+
+        response = self.client.post(
+            reverse(
+                "driver-reset-temporary-password",
+                kwargs={"pk": driver.pk},
+            ),
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        new_password = (
+            response.data["temporary_password"]
+        )
+
+        self.assertNotEqual(
+            old_password,
+            new_password,
+        )
+
+        self.assertTrue(
+            response.data["email_sent"]
+        )
+
+        self.assertEqual(
+            len(mail.outbox),
+            1,
+        )
+
+        self.assertIn(
+            new_password,
+            mail.outbox[0].body,
+        )
+
+        driver.refresh_from_db()
+
+        self.assertTrue(
+            driver.check_password(
+                new_password
+            )
+        )
+
+    @patch(
+        "accounts.views.send_verification_email",
+        return_value=False,
+    )
+    def test_email_failure_does_not_delete_registration(
+        self,
+        mocked_email,
+    ):
+        response = self.register_passenger()
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+        )
+
+        self.assertFalse(
+            response.data["email_sent"]
+        )
+
+        self.assertTrue(
+            User.objects.filter(
+                username="email_test_passenger",
+                email_verified=False,
+            ).exists()
+        )
+
+        mocked_email.assert_called_once()

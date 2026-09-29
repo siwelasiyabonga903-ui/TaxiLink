@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useAuth } from "../context/AuthContext";
+import api from "../api/client";
 
 import {
   Link,
@@ -7,10 +9,9 @@ import {
   useNavigate,
 } from "react-router-dom";
 
-import { useAuth } from "../context/AuthContext";
-
-
 export default function LoginPage() {
+
+  const location = useLocation();
   const [username, setUsername] =
     useState("");
 
@@ -23,11 +24,58 @@ export default function LoginPage() {
   const [submitting, setSubmitting] =
     useState(false);
 
+  const [showResend, setShowResend] =
+  useState(false);
+
+  const [
+  verificationEmail,
+  setVerificationEmail,
+] = useState(
+  location.state?.verificationEmail
+  || ""
+);
+
+  const [resending, setResending] =
+    useState(false);
+
+  const [resendMessage, setResendMessage] =
+    useState("");
+
   const { user, login } = useAuth();
 
   const navigate = useNavigate();
-  const location = useLocation();
 
+
+  const verificationStatus =
+  new URLSearchParams(
+    location.search
+  ).get("verification");
+
+const verificationNotice = {
+  success: {
+    className: "success-message",
+    message: (
+      "Email confirmed successfully. "
+      + "You can now sign in."
+    ),
+  },
+
+  already: {
+    className: "success-message",
+    message: (
+      "This email has already been confirmed. "
+      + "You can sign in."
+    ),
+  },
+
+  invalid: {
+    className: "error-message",
+    message: (
+      "This confirmation link is invalid or "
+      + "has expired. Request a new link."
+    ),
+  },
+}[verificationStatus];
 
   if (user) {
     return (
@@ -38,6 +86,62 @@ export default function LoginPage() {
     );
   }
 
+const handleResendVerification =
+  async () => {
+    const email =
+      verificationEmail
+        .trim()
+        .toLowerCase();
+
+    setError("");
+    setResendMessage("");
+
+    if (!email) {
+      setError(
+        "Enter your email address."
+      );
+
+      return;
+    }
+
+    setResending(true);
+
+    try {
+      const response = await api.post(
+        "/accounts/verify-email/resend/",
+        { email }
+      );
+
+      setResendMessage(
+        response.data?.detail
+        || (
+          "If an unverified account exists, "
+          + "a confirmation link has been sent."
+        )
+      );
+    } catch (requestError) {
+      const data =
+        requestError.response?.data;
+
+      const firstError = data
+        ? Object.values(data).flat()[0]
+        : null;
+
+      setError(
+        typeof data?.detail === "string"
+          ? data.detail
+          : String(
+              firstError
+              || (
+                "The confirmation email could "
+                + "not be sent. Try again later."
+              )
+            )
+      );
+    } finally {
+      setResending(false);
+    }
+  };
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -47,16 +151,31 @@ export default function LoginPage() {
 
     try {
       await login(
-        username,
-        password
-      );
+      username.trim(),
+      password
+    );
 
       navigate("/dashboard");
-    } catch {
-      setError(
-        "Invalid username or password."
-      );
-    } finally {
+    } catch (requestError) {
+  const apiMessage =
+  requestError.response?.data?.detail;
+
+  const message =
+    typeof apiMessage === "string"
+      ? apiMessage
+      : "Invalid username or password.";
+
+  setError(message);
+
+  if (
+    message
+      .toLowerCase()
+      .includes("confirm")
+  ) {
+    setShowResend(true);
+  }
+
+} finally {
       setSubmitting(false);
     }
   };
@@ -82,6 +201,16 @@ export default function LoginPage() {
         <p>
           Sign in to continue.
         </p>
+
+        {verificationNotice && (
+          <div
+            className={
+              verificationNotice.className
+            }
+          >
+            {verificationNotice.message}
+          </div>
+        )}
 
         {location.state?.message && (
           <div className="success-message">
@@ -134,6 +263,55 @@ export default function LoginPage() {
             Forgot password?
           </Link>
         </p>
+
+        <button
+          type="button"
+          onClick={() => {
+            setShowResend(
+              (current) => !current
+            );
+
+            setError("");
+            setResendMessage("");
+          }}
+        >
+          Resend confirmation email
+        </button>
+
+        {showResend && (
+          <div>
+            <input
+              type="email"
+              value={verificationEmail}
+              onChange={(event) =>
+                setVerificationEmail(
+                  event.target.value
+                )
+              }
+              placeholder="Registration email"
+              autoComplete="email"
+              aria-label="Registration email"
+            />
+
+            <button
+              type="button"
+              disabled={resending}
+              onClick={
+                handleResendVerification
+              }
+            >
+              {resending
+                ? "Sending..."
+                : "Send confirmation link"}
+            </button>
+          </div>
+        )}
+
+        {resendMessage && (
+          <div className="success-message">
+            {resendMessage}
+          </div>
+        )}
 
         <p>
           New passenger?{" "}

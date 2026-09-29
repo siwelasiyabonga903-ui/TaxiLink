@@ -188,8 +188,15 @@ export default function ChangePasswordPage() {
           onChange={handleChange}
           autoComplete="new-password"
           minLength="8"
+          pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9\s]).{8,}"
+          title="Use at least 8 characters with uppercase, lowercase, a number, and a special character."
           required
         />
+
+        <small>
+          At least 8 characters, including uppercase,
+          lowercase, a number, and a special character.
+        </small>
 
         <button
           type="submit"

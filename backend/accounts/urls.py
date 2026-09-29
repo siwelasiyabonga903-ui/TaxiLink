@@ -16,6 +16,9 @@ from .views import (
     PasswordResetConfirmView,
     PasswordResetRequestView,
     AccountPasswordChangeView,
+    EmailVerificationResendView,
+    EmailVerificationView,
+    TaxiLinkTokenObtainPairView,
 )
 
 
@@ -24,6 +27,18 @@ urlpatterns = [
     "change-password/",
     AccountPasswordChangeView.as_view(),
     name="account-change-password",
+    ),
+
+    path(
+    "verify-email/",
+    EmailVerificationView.as_view(),
+    name="email-verify",
+    ),
+
+    path(
+        "verify-email/resend/",
+        EmailVerificationResendView.as_view(),
+        name="email-verification-resend",
     ),
 
     path(
@@ -63,7 +78,7 @@ urlpatterns = [
 
     path(
         "login/",
-        TokenObtainPairView.as_view(),
+        TaxiLinkTokenObtainPairView.as_view(),
         name="token-obtain-pair",
     ),
 

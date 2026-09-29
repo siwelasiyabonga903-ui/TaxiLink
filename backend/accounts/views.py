@@ -3,21 +3,16 @@ from django.contrib.auth import get_user_model
 from rest_framework import generics
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import (
-    AllowAny,
-    BasePermission,
-    IsAuthenticated,
-)
-
+from rest_framework.permissions import (AllowAny,BasePermission,IsAuthenticated,)
 from django.conf import settings
-from django.contrib.auth.tokens import (
-    default_token_generator,
-)
+from django.contrib.auth.tokens import (default_token_generator,)
 from django.core.mail import send_mail
-from django.utils.encoding import force_bytes
-from django.utils.http import (
-    urlsafe_base64_encode,
-)
+from django.utils.encoding import (force_bytes, force_str,)
+from django.utils.http import (urlsafe_base64_encode, urlsafe_base64_decode,)
+from django.shortcuts import redirect
+from rest_framework.views import APIView
+from rest_framework_simplejwt.views import (TokenObtainPairView,)
+from .email_service import (send_driver_credentials_email,send_verification_email,)
 
 from .serializers import (
     DriverPasswordChangeSerializer,
@@ -29,6 +24,7 @@ from .serializers import (
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     AccountPasswordChangeSerializer,
+    TaxiLinkTokenObtainPairSerializer,
 )
 
 
@@ -59,6 +55,59 @@ class PassengerRegistrationView(
     permission_classes = [
         AllowAny
     ]
+    def create(
+        self,
+        request,
+        *args,
+        **kwargs,
+    ):
+        serializer = self.get_serializer(
+            data=request.data
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        user = serializer.save()
+
+        email_sent = (
+            send_verification_email(
+                user,
+                request,
+            )
+        )
+
+        response_data = dict(
+            serializer.data
+        )
+
+        response_data.update(
+            {
+                "email_sent": email_sent,
+
+                "detail": (
+                    "Registration successful. "
+                    "Check your email to confirm "
+                    "your account."
+                    if email_sent
+                    else (
+                        "Registration successful, "
+                        "but the confirmation email "
+                        "could not be sent. Request "
+                        "another confirmation email."
+                    )
+                ),
+            }
+        )
+
+        return Response(
+            response_data,
+            status=status.HTTP_201_CREATED,
+            headers=self.get_success_headers(
+                serializer.data
+            ),
+        )
 
 
 class DriverRegistrationView(
@@ -72,7 +121,208 @@ class DriverRegistrationView(
         IsAuthenticated,
         IsDispatcher,
     ]
+    def create(
+        self,
+        request,
+        *args,
+        **kwargs,
+    ):
+        serializer = self.get_serializer(
+            data=request.data
+        )
 
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        driver = serializer.save()
+
+        response_data = dict(
+            serializer.data
+        )
+
+        temporary_password = (
+            response_data[
+                "temporary_password"
+            ]
+        )
+
+        email_sent = (
+            send_driver_credentials_email(
+                driver,
+                temporary_password,
+                request,
+            )
+        )
+
+        response_data[
+            "email_sent"
+        ] = email_sent
+
+        response_data["detail"] = (
+            "Driver created and credentials "
+            "emailed successfully."
+            if email_sent
+            else (
+                "Driver created, but the "
+                "credential email could not be "
+                "sent. Give the displayed "
+                "temporary password to the "
+                "driver securely."
+            )
+        )
+
+        return Response(
+            response_data,
+            status=status.HTTP_201_CREATED,
+            headers=self.get_success_headers(
+                serializer.data
+            ),
+        )
+
+class TaxiLinkTokenObtainPairView(
+    TokenObtainPairView
+):
+    serializer_class = (
+        TaxiLinkTokenObtainPairSerializer
+    )
+
+
+class EmailVerificationView(
+    APIView
+):
+    permission_classes = [
+        AllowAny
+    ]
+
+    def get(self, request):
+        uid = request.query_params.get(
+            "uid",
+            "",
+        )
+
+        token = (
+            request.query_params.get(
+                "token",
+                "",
+            )
+        )
+
+        try:
+            user_id = force_str(
+                urlsafe_base64_decode(
+                    uid
+                )
+            )
+
+            user = User.objects.get(
+                pk=user_id
+            )
+        except (
+            TypeError,
+            ValueError,
+            OverflowError,
+            User.DoesNotExist,
+        ):
+            return redirect(
+                f"{settings.FRONTEND_URL}"
+                "/login?verification=invalid"
+            )
+
+        if user.email_verified:
+            return redirect(
+                f"{settings.FRONTEND_URL}"
+                "/login?verification=already"
+            )
+
+        if not (
+            default_token_generator
+            .check_token(
+                user,
+                token,
+            )
+        ):
+            return redirect(
+                f"{settings.FRONTEND_URL}"
+                "/login?verification=invalid"
+            )
+
+        user.email_verified = True
+
+        user.save(
+            update_fields=[
+                "email_verified"
+            ]
+        )
+
+        return redirect(
+            f"{settings.FRONTEND_URL}"
+            "/login?verification=success"
+        )
+
+
+class EmailVerificationResendView(
+    generics.GenericAPIView
+):
+    serializer_class = (
+        PasswordResetRequestSerializer
+    )
+
+    permission_classes = [
+        AllowAny
+    ]
+
+    def post(self, request):
+        serializer = self.get_serializer(
+            data=request.data
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        user = User.objects.filter(
+            email__iexact=(
+                serializer.validated_data[
+                    "email"
+                ]
+            ),
+            is_active=True,
+            email_verified=False,
+        ).first()
+
+        if user:
+            email_sent = (
+                send_verification_email(
+                    user,
+                    request,
+                )
+            )
+
+            if not email_sent:
+                return Response(
+                    {
+                        "detail": (
+                            "Confirmation email "
+                            "could not be sent right "
+                            "now. Please try again later."
+                        )
+                    },
+                    status=(
+                        status
+                        .HTTP_503_SERVICE_UNAVAILABLE
+                    ),
+                )
+
+        return Response(
+            {
+                "detail": (
+                    "If an unverified account "
+                    "exists for this email, a "
+                    "confirmation link has been sent."
+                )
+            }
+        )
 
 class CurrentUserProfileView(
     generics.RetrieveUpdateAPIView
@@ -188,13 +438,34 @@ class DriverTemporaryPasswordResetView(
             ]
         )
 
+        email_sent = (
+            send_driver_credentials_email(
+                driver,
+                temporary_password,
+                request,
+            )
+        )
+
         return Response(
             {
                 "detail": (
-                    "Temporary password reset successfully."
+                    "Temporary password reset and "
+                    "emailed successfully."
+                    if email_sent
+                    else (
+                        "Temporary password reset, but "
+                        "the email could not be sent. "
+                        "Give the displayed password to "
+                        "the driver securely."
+                    )
                 ),
+
+                "email_sent": email_sent,
+
                 "driver_id": driver.id,
+
                 "username": driver.username,
+
                 "temporary_password": (
                     temporary_password
                 ),
@@ -291,7 +562,7 @@ class PasswordResetRequestView(
                 recipient_list=[
                     user.email
                 ],
-                fail_silently=True,
+                fail_silently=False,
             )
 
         return Response(

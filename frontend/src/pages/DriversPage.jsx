@@ -189,24 +189,32 @@ export default function DriversPage() {
 
 
   const handleDriverChange = (
-    event
-  ) => {
-    const {
-      name,
-      value,
-    } = event.target;
+  event
+) => {
+  const {
+    name,
+    value,
+  } = event.target;
 
-    setDriverForm(
-      (current) => ({
-        ...current,
+  let nextValue = value;
 
-        [name]:
-          name === "number_plate"
-            ? value.toUpperCase()
-            : value,
-      })
-    );
-  };
+  if (name === "number_plate") {
+    nextValue = value.toUpperCase();
+  }
+
+  if (name === "phone_number") {
+    nextValue = value
+      .replace(/\D/g, "")
+      .slice(0, 10);
+  }
+
+  setDriverForm(
+    (current) => ({
+      ...current,
+      [name]: nextValue,
+    })
+  );
+};
 
 
   const copyPassword = async (
@@ -250,7 +258,28 @@ export default function DriversPage() {
     try {
       const response = await api.post(
         "/accounts/drivers/register/",
-        driverForm
+        {
+          ...driverForm,
+          username:
+            driverForm.username.trim(),
+
+          first_name:
+            driverForm.first_name.trim(),
+
+          last_name:
+            driverForm.last_name.trim(),
+
+          email:
+            driverForm.email
+              .trim()
+              .toLowerCase(),
+
+          phone_number:
+            driverForm.phone_number.trim(),
+
+          number_plate:
+            driverForm.number_plate.trim(),
+        }
       );
 
       setGeneratedDriverCredentials({
@@ -567,6 +596,7 @@ export default function DriversPage() {
                   onChange={
                     handleDriverChange
                   }
+                  autoComplete="email"
                   required
                 />
               </label>
@@ -577,13 +607,18 @@ export default function DriversPage() {
 
                 <input
                   name="phone_number"
+                  type="tel"
+                  inputMode="numeric"
                   value={
-                    driverForm
-                      .phone_number
+                    driverForm.phone_number
                   }
                   onChange={
                     handleDriverChange
                   }
+                  pattern="0[0-9]{9}"
+                  maxLength="10"
+                  title="Enter a 10-digit phone number starting with 0."
+                  autoComplete="tel"
                   required
                 />
               </label>

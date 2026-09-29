@@ -25,11 +25,18 @@ export default function RegisterPage() {
 
 
   const handleChange = (event) => {
-    setForm({
-      ...form,
-      [event.target.name]: event.target.value,
-    });
-  };
+  const { name, value } = event.target;
+
+  const nextValue =
+    name === "phone_number"
+      ? value.replace(/\D/g, "").slice(0, 10)
+      : value;
+
+  setForm((current) => ({
+    ...current,
+    [name]: nextValue,
+  }));
+};
 
 
   const handleSubmit = async (event) => {
@@ -38,10 +45,19 @@ export default function RegisterPage() {
     setSubmitting(true);
 
     try {
-      await registerPassenger(form);
+      const response = await registerPassenger(form);
+
       navigate("/login", {
+        replace: true,
         state: {
-          message: "Registration successful. Please log in.",
+          message:
+            response.data?.detail
+            || (
+              "Registration successful. "
+              + "Check your email to confirm your account."
+            ),
+          verificationEmail:
+            form.email.trim().toLowerCase(),
         },
       });
     } catch (requestError) {
@@ -100,13 +116,20 @@ export default function RegisterPage() {
           value={form.email}
           onChange={handleChange}
           required
+          autoComplete="email"
         />
 
         <input
           name="phone_number"
+          type="tel"
+          inputMode="numeric"
           placeholder="Phone number"
           value={form.phone_number}
           onChange={handleChange}
+          pattern="0[0-9]{9}"
+          maxLength="10"
+          title="Enter a 10-digit phone number starting with 0."
+          autoComplete="tel"
           required
         />
 
@@ -117,7 +140,16 @@ export default function RegisterPage() {
           value={form.password}
           onChange={handleChange}
           required
+          autoComplete="new-password"
+          minLength="8"
+          pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9\s]).{8,}"
+          title="Use at least 8 characters with uppercase, lowercase, a number, and a special character."
         />
+
+        <small>
+          At least 8 characters, including uppercase,
+          lowercase, a number, and a special character.
+        </small>
 
         <input
           name="password_confirm"
@@ -126,6 +158,8 @@ export default function RegisterPage() {
           value={form.password_confirm}
           onChange={handleChange}
           required
+          autoComplete="new-password"
+          minLength="8"
         />
 
         <button disabled={submitting} type="submit">

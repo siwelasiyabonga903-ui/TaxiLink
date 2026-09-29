@@ -7,10 +7,24 @@ from django.contrib.auth.tokens import default_token_generator
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
 from rest_framework import serializers
-
+from django.core.exceptions import (ValidationError as DjangoValidationError,)
+from .validators import validate_phone_number
+from rest_framework.exceptions import (AuthenticationFailed,)
+from rest_framework_simplejwt.serializers import (TokenObtainPairSerializer,)
 
 User = get_user_model()
 
+def normalize_unique_email(value):
+    email = value.strip().lower()
+
+    if User.objects.filter(
+        email__iexact=email
+    ).exists():
+        raise serializers.ValidationError(
+            "An account with this email already exists."
+        )
+
+    return email
 
 def generate_temporary_password(length=12):
     special_characters = "!@#$%"
@@ -43,6 +57,12 @@ def generate_temporary_password(length=12):
 class PassengerRegistrationSerializer(
     serializers.ModelSerializer
 ):
+
+    phone_number = serializers.CharField(
+        min_length=10,
+        max_length=10,
+        validators=[validate_phone_number],
+    )
     password = serializers.CharField(
         write_only=True,
         min_length=8,
@@ -67,6 +87,9 @@ class PassengerRegistrationSerializer(
             "password_confirm",
         )
 
+    def validate_email(self, value):
+        return normalize_unique_email(value)
+
     def validate(self, attrs):
         if (
             attrs["password"]
@@ -79,6 +102,27 @@ class PassengerRegistrationSerializer(
                     )
                 }
             )
+
+        candidate_user = User(
+            username=attrs.get("username", ""),
+            first_name=attrs.get("first_name", ""),
+            last_name=attrs.get("last_name", ""),
+            email=attrs.get("email", ""),
+        )
+
+        try:
+            validate_password(
+                attrs["password"],
+                user=candidate_user,
+            )
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(
+                {
+                    "password": list(
+                        exc.messages
+                    )
+                }
+            ) from exc
 
         return attrs
 
@@ -94,6 +138,7 @@ class PassengerRegistrationSerializer(
         user = User.objects.create_user(
             password=password,
             role=User.Role.PASSENGER,
+            email_verified=False,
             **validated_data,
         )
 
@@ -103,6 +148,11 @@ class PassengerRegistrationSerializer(
 class UserProfileSerializer(
     serializers.ModelSerializer
 ):
+    phone_number = serializers.CharField(
+        min_length=10,
+        max_length=10,
+        validators=[validate_phone_number],
+    )
     role_display = serializers.CharField(
         source="get_role_display",
         read_only=True,
@@ -122,6 +172,7 @@ class UserProfileSerializer(
             "role_display",
             "number_plate",
             "must_change_password",
+            "email_verified",
         )
 
         read_only_fields = (
@@ -132,6 +183,7 @@ class UserProfileSerializer(
             "role_display",
             "number_plate",
             "must_change_password",
+            "email_verified",
         )
 
 class DriverManagementSerializer(
@@ -150,6 +202,7 @@ class DriverManagementSerializer(
             "phone_number",
             "number_plate",
             "must_change_password",
+            "email_verified",
         )
 
         read_only_fields = fields
@@ -160,6 +213,12 @@ class DriverManagementSerializer(
 class DriverRegistrationSerializer(
     serializers.ModelSerializer
 ):
+
+    phone_number = serializers.CharField(
+        min_length=10,
+        max_length=10,
+        validators=[validate_phone_number],
+    )
     temporary_password = (
         serializers.SerializerMethodField()
     )
@@ -212,6 +271,9 @@ class DriverRegistrationSerializer(
 
         return normalized_plate
 
+    def validate_email(self, value):
+        return normalize_unique_email(value)
+
     def create(self, validated_data):
         temporary_password = (
             generate_temporary_password()
@@ -221,6 +283,7 @@ class DriverRegistrationSerializer(
             password=temporary_password,
             role=User.Role.DRIVER,
             must_change_password=True,
+            email_verified=False,
             **validated_data,
         )
 
@@ -537,3 +600,44 @@ class AccountPasswordChangeSerializer(
         )
 
         return user
+
+class TaxiLinkTokenObtainPairSerializer(
+    TokenObtainPairSerializer
+):
+    def validate(self, attrs):
+        username = attrs.get(
+            self.username_field,
+            "",
+        )
+
+        password = attrs.get(
+            "password",
+            "",
+        )
+
+        user = User.objects.filter(
+            **{
+                self.username_field:
+                    username
+            }
+        ).first()
+
+        if (
+            user
+            and user.is_active
+            and user.check_password(
+                password
+            )
+            and not user.email_verified
+        ):
+            raise AuthenticationFailed(
+                (
+                    "Confirm your email address "
+                    "before logging in."
+                ),
+                code="email_not_verified",
+            )
+
+        return super().validate(
+            attrs
+        )

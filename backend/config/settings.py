@@ -103,6 +103,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "anymail",
 ]
 
 
@@ -258,6 +259,13 @@ AUTH_PASSWORD_VALIDATORS = [
             "NumericPasswordValidator"
         ),
     },
+
+    {
+    "NAME": (
+        "accounts.validators."
+        "StrongPasswordValidator"
+    ),
+    },
 ]
 
 
@@ -374,13 +382,28 @@ REST_FRAMEWORK = {
 
 EMAIL_BACKEND = os.getenv(
     "EMAIL_BACKEND",
-    "django.core.mail.backends.console.EmailBackend",
+    (
+        "django.core.mail.backends.smtp.EmailBackend"
+        if IS_RENDER
+        else (
+            "django.core.mail.backends.console."
+            "EmailBackend"
+        )
+    ),
 )
 
 EMAIL_HOST = os.getenv(
     "EMAIL_HOST",
     "smtp.gmail.com",
 )
+
+ANYMAIL = {
+    "BREVO_API_KEY": os.getenv(
+        "BREVO_API_KEY",
+        "",
+    ),
+    "REQUESTS_TIMEOUT": 15,
+}
 
 EMAIL_PORT = int(
     os.getenv(
@@ -410,6 +433,13 @@ EMAIL_HOST_PASSWORD = os.getenv(
 DEFAULT_FROM_EMAIL = os.getenv(
     "DEFAULT_FROM_EMAIL",
     "TaxiLink <no-reply@taxilink.local>",
+)
+
+EMAIL_TIMEOUT = int(
+    os.getenv(
+        "EMAIL_TIMEOUT",
+        "15",
+    )
 )
 
 FIREBASE_CREDENTIALS_PATH = os.getenv(
