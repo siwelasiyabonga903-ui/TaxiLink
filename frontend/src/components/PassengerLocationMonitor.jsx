@@ -26,7 +26,7 @@ function getBrowserLocation() {
       {
         enableHighAccuracy: true,
         timeout: 10000,
-        maximumAge: 5000,
+        maximumAge: 0,
       }
     );
   });
@@ -39,6 +39,12 @@ export default function PassengerLocationMonitor() {
 
   const checkingRef =
     useRef(false);
+
+  const [graceDeadline, setGraceDeadline] =
+    useState(null);
+
+  const [remainingSeconds, setRemainingSeconds] =
+    useState(0);
 
 
   const revalidateLocation = useCallback(
@@ -64,6 +70,9 @@ export default function PassengerLocationMonitor() {
           || waitingRequest.status
             !== "WAITING"
         ) {
+          setGraceDeadline(null);
+          setRemainingSeconds(0);
+
           return;
         }
 
@@ -99,6 +108,9 @@ export default function PassengerLocationMonitor() {
 
 
         if (response.data.cancelled) {
+          setGraceDeadline(null);
+          setRemainingSeconds(0);
+
           setMonitorMessage(
             response.data.detail
             || (
@@ -115,16 +127,39 @@ export default function PassengerLocationMonitor() {
           response.data
             .grace_period_active
         ) {
-          setMonitorMessage(
-            "You appear to be outside the waiting spot. "
-            + "Return within 30 seconds to keep "
-            + "your waiting request active."
-          );
+          const seconds =
+            response.data.grace_seconds_remaining;
+
+          if (
+            typeof seconds === "number"
+            && Number.isFinite(seconds)
+            && seconds >= 0
+          ) {
+            setGraceDeadline(
+              Date.now() + seconds * 1000
+            );
+
+            setRemainingSeconds(
+              Math.ceil(seconds)
+            );
+
+            setMonitorMessage("");
+          } else {
+            setGraceDeadline(null);
+            setRemainingSeconds(0);
+
+            setMonitorMessage(
+              "You appear to be outside the waiting spot. "
+              + "Return to keep your waiting request active."
+            );
+          }
 
           return;
         }
 
 
+        setGraceDeadline(null);
+        setRemainingSeconds(0);
         setMonitorMessage("");
       } catch {
         setMonitorMessage(
@@ -141,30 +176,114 @@ export default function PassengerLocationMonitor() {
   useEffect(() => {
     revalidateLocation();
 
-    const interval =
-      window.setInterval(
-        () => {
-          revalidateLocation();
-        },
-        10000
+    const interval = window.setInterval(
+      revalidateLocation,
+      10000
+    );
+
+    const recheckWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        revalidateLocation();
+      }
+    };
+
+    document.addEventListener(
+      "visibilitychange",
+      recheckWhenVisible
+    );
+
+    const resumeEvents = [
+      "focus",
+      "pageshow",
+      "online",
+    ];
+
+    for (const eventName of resumeEvents) {
+      window.addEventListener(
+        eventName,
+        recheckWhenVisible
       );
+    }
 
     return () => {
-      window.clearInterval(
-        interval
+      window.clearInterval(interval);
+
+      document.removeEventListener(
+        "visibilitychange",
+        recheckWhenVisible
       );
+
+      for (const eventName of resumeEvents) {
+        window.removeEventListener(
+          eventName,
+          recheckWhenVisible
+        );
+      }
     };
   }, [revalidateLocation]);
 
 
-  if (!monitorMessage) {
+  useEffect(() => {
+    if (graceDeadline === null) {
+      return;
+    }
+
+    const updateCountdown = () => {
+      setRemainingSeconds(
+        Math.max(
+          0,
+          Math.ceil(
+            (graceDeadline - Date.now()) / 1000
+          )
+        )
+      );
+    };
+
+    updateCountdown();
+
+    const timer = window.setInterval(
+      updateCountdown,
+      1000
+    );
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [graceDeadline]);
+
+
+  const countdownMessage =
+    graceDeadline === null
+      ? ""
+      : remainingSeconds > 0
+        ? (
+            "You appear to be outside the waiting spot. "
+            + `Return within ${remainingSeconds} seconds to keep `
+            + "your waiting request active."
+          )
+        : (
+            "The return period has ended. "
+            + "Waiting for location verification."
+          );
+
+  if (!monitorMessage && !countdownMessage) {
     return null;
   }
 
 
   return (
-    <div className="error-message">
-      {monitorMessage}
-    </div>
+    <>
+      {monitorMessage && (
+        <div className="error-message">
+          {monitorMessage}
+        </div>
+      )}
+
+      {countdownMessage && (
+        <div className="error-message">
+          {countdownMessage}
+        </div>
+      )}
+    </>
   );
 }

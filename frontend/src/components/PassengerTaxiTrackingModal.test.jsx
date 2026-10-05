@@ -97,7 +97,10 @@ describe(
     afterEach(() => {
       cleanup();
       vi.useRealTimers();
+      vi.restoreAllMocks();
     });
+
+
 
     beforeEach(() => {
       vi.clearAllMocks();

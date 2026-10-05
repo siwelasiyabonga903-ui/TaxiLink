@@ -431,6 +431,10 @@ class Notification(models.Model):
             "DISPATCH_REASSIGNED",
             "Dispatch reassigned",
         )
+        WAITING_SPOT_EXIT = (
+            "WAITING_SPOT_EXIT",
+            "Left waiting spot",
+        )
 
     recipient = models.ForeignKey(
         settings.AUTH_USER_MODEL,

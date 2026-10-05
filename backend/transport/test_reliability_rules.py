@@ -790,7 +790,7 @@ class DispatchReliabilityRulesTests(
 
         leaving_request.outside_geofence_since = (
             timezone.now()
-            - timedelta(seconds=31)
+            - timedelta(seconds=61)
         )
 
         leaving_request.save(
@@ -887,7 +887,7 @@ class DispatchReliabilityRulesTests(
 
         waiting_request.outside_geofence_since = (
             timezone.now()
-            - timedelta(seconds=31)
+            - timedelta(seconds=61)
         )
 
         waiting_request.save(

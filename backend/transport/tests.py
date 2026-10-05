@@ -2970,6 +2970,82 @@ class TripCompletionIntegrityTests(APITestCase):
 class WaitingLocationRevalidationTests(
     APITestCase
 ):
+
+    def test_countdown_decreases_and_resets_only_after_return(self):
+        started_at = timezone.now()
+
+        with patch(
+            "transport.views.timezone.now",
+            return_value=started_at,
+        ):
+            first_response = self.post_outside()
+
+        self.assertEqual(
+            first_response.status_code,
+            status.HTTP_200_OK,
+        )
+        self.assertEqual(
+            first_response.data["grace_seconds_remaining"],
+            60,
+        )
+
+        later = started_at + timedelta(seconds=20)
+
+        with patch(
+            "transport.views.timezone.now",
+            return_value=later,
+        ):
+            repeated_response = self.post_outside()
+            inside_response = self.post_inside()
+
+        self.assertEqual(
+            repeated_response.status_code,
+            status.HTTP_200_OK,
+        )
+        self.assertEqual(
+            repeated_response.data["grace_seconds_remaining"],
+            40,
+        )
+        self.assertEqual(
+            inside_response.status_code,
+            status.HTTP_200_OK,
+        )
+        self.assertEqual(
+            inside_response.data["grace_seconds_remaining"],
+            0,
+        )
+        self.assertFalse(
+            inside_response.data["grace_period_active"]
+        )
+
+        self.waiting_request.refresh_from_db()
+        self.assertIsNone(
+            self.waiting_request.outside_geofence_since
+        )
+
+        restarted_at = started_at + timedelta(seconds=25)
+
+        with patch(
+            "transport.views.timezone.now",
+            return_value=restarted_at,
+        ):
+            new_exit_response = self.post_outside()
+
+        self.assertEqual(
+            new_exit_response.status_code,
+            status.HTTP_200_OK,
+        )
+        self.assertEqual(
+            new_exit_response.data["grace_seconds_remaining"],
+            60,
+        )
+
+        self.waiting_request.refresh_from_db()
+        self.assertEqual(
+            self.waiting_request.outside_geofence_since,
+            restarted_at,
+        )
+
     def setUp(self):
         self.passenger = (
             User.objects.create_user(
@@ -3093,6 +3169,72 @@ class WaitingLocationRevalidationTests(
             ]
         )
 
+    def test_each_exit_sends_one_warning_and_restarts_timer(self):
+        started_at = timezone.now()
+        restarted_at = started_at + timedelta(seconds=20)
+
+        warnings = Notification.objects.filter(
+            recipient=self.passenger,
+            notification_type=Notification.Type.WAITING_SPOT_EXIT,
+        )
+
+        with patch(
+            "transport.notification_service.send_push_notification"
+        ) as push, self.captureOnCommitCallbacks(execute=True):
+            with patch(
+                "transport.views.timezone.now",
+                return_value=started_at,
+            ):
+                first_response = self.post_outside()
+                self.post_outside()
+
+            self.assertEqual(
+                first_response.status_code,
+                status.HTTP_200_OK,
+            )
+            self.waiting_request.refresh_from_db()
+            self.assertEqual(
+                self.waiting_request.outside_geofence_since,
+                started_at,
+            )
+            self.assertEqual(warnings.count(), 1)
+
+            inside_response = self.post_inside()
+
+            self.assertEqual(
+                inside_response.status_code,
+                status.HTTP_200_OK,
+            )
+            self.waiting_request.refresh_from_db()
+            self.assertIsNone(
+                self.waiting_request.outside_geofence_since
+            )
+            self.assertFalse(
+                inside_response.data["grace_period_active"]
+            )
+
+            with patch(
+                "transport.views.timezone.now",
+                return_value=restarted_at,
+            ):
+                second_response = self.post_outside()
+                self.post_outside()
+
+            self.assertEqual(
+                second_response.status_code,
+                status.HTTP_200_OK,
+            )
+            self.waiting_request.refresh_from_db()
+            self.assertEqual(
+                self.waiting_request.outside_geofence_since,
+                restarted_at,
+            )
+            self.assertTrue(
+                second_response.data["grace_period_active"]
+            )
+            self.assertEqual(warnings.count(), 2)
+
+        self.assertEqual(push.call_count, 2)
 
     def test_first_outside_reading_starts_grace_period(
         self
@@ -3137,7 +3279,7 @@ class WaitingLocationRevalidationTests(
             .outside_geofence_since = (
                 timezone.now()
                 - timedelta(
-                    seconds=15
+                    seconds=59
                 )
             )
 
@@ -3226,7 +3368,7 @@ class WaitingLocationRevalidationTests(
             .outside_geofence_since = (
                 timezone.now()
                 - timedelta(
-                    seconds=31
+                    seconds=61
                 )
             )
 

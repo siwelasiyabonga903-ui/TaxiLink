@@ -1434,3 +1434,60 @@ a {
     padding: 14px;
   }
 }
+
+.login-page .auth-card .login-password-field {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.login-page .auth-card .login-password-field input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 48px;
+  margin: 0;
+  padding: 12px 56px 12px 14px;
+  border-radius: 10px;
+  font-size: 16px;
+}
+
+.login-page .auth-card .login-password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+
+  display: grid;
+  place-items: center;
+
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+
+  background: transparent;
+  color: #164cc4;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.login-page .auth-card .login-password-toggle:hover {
+  background: rgba(36, 99, 235, 0.1);
+}
+
+.login-page .auth-card .login-password-toggle:focus-visible {
+  outline: 2px solid #2463eb;
+  outline-offset: 2px;
+}
+
+@media (max-width: 700px) {
+  .login-page .auth-card .login-password-field input {
+    min-height: 44px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+}

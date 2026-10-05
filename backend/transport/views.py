@@ -13,7 +13,7 @@ from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
-
+from math import ceil
 from .models import (
     DispatchAssignment,
     DispatchRequest,
@@ -48,7 +48,7 @@ from .serializers import (
 
 
 User = get_user_model()
-GEOFENCE_EXIT_GRACE_SECONDS = 30
+GEOFENCE_EXIT_GRACE_SECONDS = 60
 
 
 def waiting_spot_queryset():
@@ -489,6 +489,8 @@ class RevalidateWaitingLocationView(APIView):
                     {
                         "active": False,
                         "cancelled": False,
+                        "grace_period_active": False,
+                        "grace_seconds_remaining": 0,
                         "detail": (
                             "You do not have an "
                             "active waiting request."
@@ -538,6 +540,7 @@ class RevalidateWaitingLocationView(APIView):
                         "cancelled": False,
                         "inside_geofence": True,
                         "grace_period_active": False,
+                        "grace_seconds_remaining": 0,
                         "distance_meters": round(
                             distance,
                             2,
@@ -559,12 +562,28 @@ class RevalidateWaitingLocationView(APIView):
                     ]
                 )
 
+                create_notification(
+                    recipient=request.user,
+                    notification_type=(
+                        Notification.Type.WAITING_SPOT_EXIT
+                    ),
+                    title="Return to your waiting spot",
+                    message=(
+                        "You have left the waiting spot. "
+                        f"Return within {GEOFENCE_EXIT_GRACE_SECONDS} seconds "
+                        "to keep your waiting request active."
+                    ),
+                )
+
                 return Response(
                     {
                         "active": True,
                         "cancelled": False,
                         "inside_geofence": False,
                         "grace_period_active": True,
+                        "grace_seconds_remaining": (
+                            GEOFENCE_EXIT_GRACE_SECONDS
+                        ),
                         "distance_meters": round(
                             distance,
                             2,
@@ -588,6 +607,13 @@ class RevalidateWaitingLocationView(APIView):
                         "cancelled": False,
                         "inside_geofence": False,
                         "grace_period_active": True,
+                        "grace_seconds_remaining": max(
+                            0,
+                            ceil(
+                                GEOFENCE_EXIT_GRACE_SECONDS
+                                - outside_seconds
+                            ),
+                        ),
                         "distance_meters": round(
                             distance,
                             2,
@@ -710,6 +736,7 @@ class RevalidateWaitingLocationView(APIView):
                     "cancelled": True,
                     "inside_geofence": False,
                     "grace_period_active": False,
+                    "grace_seconds_remaining": 0,
                     "distance_meters": round(
                         distance,
                         2,

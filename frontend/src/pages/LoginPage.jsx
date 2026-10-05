@@ -23,6 +23,9 @@ export default function LoginPage() {
   const [password, setPassword] =
     useState("");
 
+  const [showPassword, setShowPassword] =
+    useState(false);
+
   const [error, setError] =
     useState("");
 
@@ -55,14 +58,14 @@ export default function LoginPage() {
     },
 
     invalid: {
-  className: "error-message",
+      className: "error-message",
 
-  message: (
-    "This confirmation link is invalid or "
-    + "has expired. Sign in below to receive "
-    + "a fresh confirmation link."
-  ),
-},
+      message: (
+        "This confirmation link is invalid or "
+        + "has expired. Sign in below to receive "
+        + "a fresh confirmation link."
+      ),
+    },
   }[verificationStatus];
 
 
@@ -75,70 +78,71 @@ export default function LoginPage() {
     );
   }
 
+
   const handleSubmit = async (event) => {
-  event.preventDefault();
+    event.preventDefault();
 
-  const normalizedEmail =
-    email.trim().toLowerCase();
+    const normalizedEmail =
+      email.trim().toLowerCase();
 
-  setError("");
-  setSubmitting(true);
+    setError("");
+    setSubmitting(true);
 
-  try {
-    await login(
-      normalizedEmail,
-      password
-    );
-
-    navigate("/dashboard");
-  } catch (requestError) {
-    const responseStatus =
-      requestError.response?.status;
-
-    const apiMessage =
-      requestError.response?.data?.detail;
-
-    const requiresConfirmation =
-      typeof apiMessage === "string"
-      && apiMessage
-        .toLowerCase()
-        .includes("confirm");
-
-    if (requiresConfirmation) {
-      try {
-        await api.post(
-          "/accounts/verify-email/resend/",
-          {
-            email: normalizedEmail,
-          }
-        );
-
-        setError(
-          "Confirm your email address before "
-          + "logging in. A fresh confirmation "
-          + "link has been sent to your email."
-        );
-      } catch {
-        setError(apiMessage);
-      }
-    } else if (responseStatus === 401) {
-      setError(
-        "Email or password is incorrect."
+    try {
+      await login(
+        normalizedEmail,
+        password
       );
-    } else {
-      setError(
+
+      navigate("/dashboard");
+    } catch (requestError) {
+      const responseStatus =
+        requestError.response?.status;
+
+      const apiMessage =
+        requestError.response?.data?.detail;
+
+      const requiresConfirmation =
         typeof apiMessage === "string"
-          ? apiMessage
-          : (
-            "Login could not be completed. "
-            + "Please try again."
-          )
-      );
+        && apiMessage
+          .toLowerCase()
+          .includes("confirm");
+
+      if (requiresConfirmation) {
+        try {
+          await api.post(
+            "/accounts/verify-email/resend/",
+            {
+              email: normalizedEmail,
+            }
+          );
+
+          setError(
+            "Confirm your email address before "
+            + "logging in. A fresh confirmation "
+            + "link has been sent to your email."
+          );
+        } catch {
+          setError(apiMessage);
+        }
+      } else if (responseStatus === 401) {
+        setError(
+          "Email or password is incorrect."
+        );
+      } else {
+        setError(
+          typeof apiMessage === "string"
+            ? apiMessage
+            : (
+                "Login could not be completed. "
+                + "Please try again."
+              )
+        );
+      }
+    } finally {
+      setSubmitting(false);
     }
-  } finally {
-    setSubmitting(false);
-  }
-};
+  };
 
 
   return (
@@ -208,18 +212,70 @@ export default function LoginPage() {
           required
         />
 
-        <input
-          value={password}
-          onChange={(event) =>
-            setPassword(
-              event.target.value
-            )
-          }
-          placeholder="Password"
-          type="password"
-          autoComplete="current-password"
-          required
-        />
+        <div className="login-password-field">
+          <input
+            id="login-password"
+            value={password}
+            onChange={(event) =>
+              setPassword(
+                event.target.value
+              )
+            }
+            placeholder="Password"
+            aria-label="Password"
+            type={
+              showPassword
+                ? "text"
+                : "password"
+            }
+            autoComplete="current-password"
+            required
+          />
+
+          <button
+            className="login-password-toggle"
+            type="button"
+            aria-label={
+              showPassword
+                ? "Hide password"
+                : "Show password"
+            }
+            aria-pressed={showPassword}
+            aria-controls="login-password"
+            onClick={() =>
+              setShowPassword(
+                (current) => !current
+              )
+            }
+          >
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <path
+                d="M2 12C4.5 7.5 8 5 12 5s7.5 2.5 10 7c-2.5 4.5-6 7-10 7S4.5 16.5 2 12Z"
+              />
+
+              <circle
+                cx="12"
+                cy="12"
+                r="3"
+              />
+
+              {showPassword && (
+                <path d="M3 3l18 18" />
+              )}
+            </svg>
+          </button>
+        </div>
 
         <button
           disabled={submitting}
